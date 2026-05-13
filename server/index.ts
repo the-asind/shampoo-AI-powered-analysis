@@ -6,7 +6,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { z } from "zod";
 import { analyzeWithAi, hashComposition, PROMPT_VERSION } from "./ai.js";
-import { checkRateLimit, createSubmission, listShampoos, listTopShampoos, saveAnalysis } from "./db.js";
+import { checkRateLimit, createSubmission, listComparisonShampoos, listShampoos, saveAnalysis } from "./db.js";
 import { verifyRecaptcha } from "./recaptcha.js";
 
 dotenv.config();
@@ -114,7 +114,7 @@ app.post("/api/analyze", async (request, reply) => {
     return rateLimited;
   }
 
-  const { result, provider, model } = await analyzeWithAi(body.data.composition, listTopShampoos(3), request.log);
+  const { result, provider, model } = await analyzeWithAi(body.data.composition, listComparisonShampoos(), request.log);
   saveAnalysis({
     inputHash: hashComposition(body.data.composition),
     composition: body.data.composition,

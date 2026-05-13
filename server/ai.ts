@@ -3,6 +3,7 @@ import { ProxyAgent, fetch as undiciFetch } from "undici";
 import { z } from "zod";
 import { heuristicAnalyzeIngredients } from "./scoring.js";
 import type { IngredientAnalysis, Shampoo } from "./types.js";
+import type { ShampooComparisonReference } from "./db.js";
 
 export const PROMPT_VERSION = "shampoo-inci-evaluator-v2";
 
@@ -12,10 +13,44 @@ type AiLogger = {
 };
 type AiFetchOptions = NonNullable<Parameters<typeof undiciFetch>[1]>;
 
+function normalizeAiText(value: unknown): string {
+  if (Array.isArray(value)) {
+    return value.map((item) => normalizeAiText(item)).filter(Boolean).join(" ");
+  }
+
+  const text = String(value ?? "").trim();
+  if (!text) {
+    return "";
+  }
+
+  if (text.startsWith("[") && text.endsWith("]")) {
+    try {
+      const parsed = JSON.parse(text);
+      if (Array.isArray(parsed)) {
+        return parsed.map((item) => normalizeAiText(item)).filter(Boolean).join(" ");
+      }
+    } catch {
+      const quotedItems = Array.from(text.matchAll(/'([^']+)'/g), (match) => match[1]?.trim()).filter(Boolean);
+      if (quotedItems.length > 0) {
+        return quotedItems.join(" ");
+      }
+    }
+  }
+
+  return text
+    .replace(/^\s*[-*]\s+/gm, "")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function textField(maxLength: number) {
+  return z.preprocess((value) => normalizeAiText(value), z.string().max(maxLength));
+}
+
 const AnalysisSchema = z.object({
   score: z.number().int().min(0).max(100),
-  title: z.string().min(3).max(140),
-  verdict: z.string().max(1600),
+  title: textField(140),
+  verdict: textField(1600),
   tone: z.enum(["good", "watch", "weak", "empty"]),
   confidence: z.enum(["высокая", "средняя", "низкая"]),
   shampooType: z.enum([
@@ -28,9 +63,9 @@ const AnalysisSchema = z.object({
     "подозрительный состав",
     "не рекомендуется",
   ]),
-  pros: z.string().max(2400),
-  cons: z.string().max(2400),
-  leaderComparison: z.string().max(1800),
+  pros: textField(2400),
+  cons: textField(2400),
+  leaderComparison: textField(1800),
   shouldSuggest: z.boolean(),
 });
 
@@ -53,7 +88,7 @@ const responseFormat = {
           type: "string",
           minLength: 3,
           maxLength: 140,
-          description: "Короткий заголовок результата для UI.",
+          description: "Короткий человеческий заголовок результата для UI. Нельзя писать placeholder вроде value, title или заголовок.",
         },
         verdict: {
           type: "string",
@@ -87,17 +122,17 @@ const responseFormat = {
         pros: {
           type: "string",
           maxLength: 2400,
-          description: "Главные плюсы одним связным текстом, без markdown-списка.",
+          description: "Главные плюсы одним связным текстом, без markdown-списка, без JSON-массива и без квадратных скобок.",
         },
         cons: {
           type: "string",
           maxLength: 2400,
-          description: "Главные минусы одним связным текстом, без markdown-списка.",
+          description: "Главные минусы одним связным текстом, без markdown-списка, без JSON-массива и без квадратных скобок.",
         },
         leaderComparison: {
           type: "string",
           maxLength: 1800,
-          description: "Сравнение с текущими лидерами списка простым языком.",
+          description: "Сравнение с переданными референсами простым языком. Нельзя писать placeholder вроде value.",
         },
         shouldSuggest: {
           type: "boolean",
@@ -120,21 +155,22 @@ const responseFormat = {
   },
 } as const;
 
-function formatLeaders(leaders: Shampoo[]) {
-  if (leaders.length === 0) {
-    return "Сейчас в базе нет опубликованных лидеров для сравнения.";
+function formatComparisonReferences(references: ShampooComparisonReference[]) {
+  if (references.length === 0) {
+    return "Сейчас в базе нет опубликованных референсов для сравнения.";
   }
 
-  return leaders
-    .map((item, index) => {
+  return references
+    .map((reference, index) => {
+      const item = reference.item;
       const price = item.price > 0 ? `${item.price} ₽/л` : "цена не указана";
       const composition = item.inci || item.base || "состав не указан";
-      return `${index + 1}. ${item.brandNote} ${item.name}. Оценка: ${item.score}/100. Стоимость: ${price}. Состав: ${composition}.`;
+      return `${index + 1}. ${reference.label}: ${item.brandNote} ${item.name}. Оценка: ${item.score}/100. Стоимость: ${price}. Кратко: ${item.base}. Состав: ${composition}.`;
     })
     .join("\n");
 }
 
-function createSystemPrompt(leaders: Shampoo[]) {
+function createSystemPrompt(references: ShampooComparisonReference[]) {
   return `
 Ты — экспертный анализатор составов шампуней для обычных потребителей.
 Твоя задача — оценивать шампунь только по составу, который пользователь передал в сообщении.
@@ -189,8 +225,15 @@ INCI позволяет отсеивать слабые, подозритель�
 10. Уверенность.
 Высокая — состав полный и корректный. Средняя — есть OCR-ошибки, но структура понятна. Низкая — состав неполный, странный, противоречивый или плохо похож на INCI.
 
-Текущие три лидера списка для сравнения:
-${formatLeaders(leaders)}
+Референсы из текущего рейтинга для сравнения:
+${formatComparisonReferences(references)}
+
+Правила заполнения JSON:
+- title, verdict, pros, cons и leaderComparison должны быть настоящим текстом, а не placeholder. Никогда не пиши "value", "title", "string", "N/A", "нет данных" вместо содержательного ответа.
+- pros и cons пиши обычным связным текстом. Не используй массивы, квадратные скобки, кавычки вокруг каждого пункта и markdown-списки.
+- leaderComparison обязательно сравнивает пользовательский состав с несколькими референсами выше: лидерами по типам кожи головы и ориентирами около 70/60/50 баллов.
+- Не уходи в регуляторные детали вроде "leave-on", "rinse-off", "запрещён в ЕС", если это не ключевой красный флаг уровня Lilial. Для обычного покупателя формулируй проще: "может раздражать чувствительную кожу", "лучше избегать при чувствительной коже головы", "устаревшая консервация".
+- Не перегружай pros и cons списком INCI-названий. Упоминай только 3–5 действительно важных причин оценки и объясняй их человеческим языком.
 
 Пиши простым языком для обычного покупателя. Не перегружай ответ химическими деталями. Не используй markdown. Не выдумывай бренд, цену, pH, назначение или страну продажи. Всегда отделяй то, что видно по составу, от того, чего по составу узнать нельзя.
 `.trim();
@@ -267,16 +310,33 @@ function extractJson(text: string) {
 
 function clampAnalysis(input: IngredientAnalysis): IngredientAnalysis {
   const score = Math.max(0, Math.min(100, Math.round(input.score)));
+  const title = normalizePlaceholder(input.title)
+    || (score >= 80
+      ? "Сильный состав без явных красных флагов"
+      : score >= 70
+        ? "Хороший состав с понятными оговорками"
+        : score >= 60
+          ? "Нормальный рабочий середняк"
+          : score >= 50
+            ? "Спорный состав без явной катастрофы"
+            : "Слабый состав с заметными минусами");
+
   return {
     ...input,
     score,
-    verdict: input.verdict.trim() || "Состав разобран, но модель не дала отдельный краткий вердикт.",
-    pros: input.pros.trim() || "Модель не выделила отдельные плюсы состава.",
-    cons: input.cons.trim() || "Модель не выделила отдельные минусы состава.",
-    leaderComparison: input.leaderComparison.trim() || "Модель не дала отдельное сравнение с лидерами, но оценка рассчитана по той же методике.",
+    title,
+    verdict: normalizePlaceholder(input.verdict) || "Состав разобран, но модель не дала отдельный краткий вердикт.",
+    pros: normalizePlaceholder(input.pros) || "Модель не выделила отдельные плюсы состава.",
+    cons: normalizePlaceholder(input.cons) || "Модель не выделила отдельные минусы состава.",
+    leaderComparison: normalizePlaceholder(input.leaderComparison) || "Модель не дала отдельное сравнение с референсами, но оценка рассчитана по той же методике.",
     tone: score >= 80 ? "good" : score >= 60 ? "watch" : "weak",
     shouldSuggest: score >= 80 && input.confidence !== "низкая" && input.shouldSuggest,
   };
+}
+
+function normalizePlaceholder(value: string) {
+  const text = normalizeAiText(value);
+  return /^(value|title|string|null|undefined|n\/a|нет данных|не указано)$/i.test(text) ? "" : text;
 }
 
 export function hashComposition(composition: string) {
@@ -285,7 +345,7 @@ export function hashComposition(composition: string) {
 
 export async function analyzeWithAi(
   composition: string,
-  leaders: Shampoo[],
+  references: ShampooComparisonReference[],
   logger?: AiLogger,
 ): Promise<{
   result: IngredientAnalysis;
@@ -326,7 +386,7 @@ export async function analyzeWithAi(
         temperature: 0.1,
         response_format: responseFormat,
         messages: [
-          { role: "system", content: createSystemPrompt(leaders) },
+          { role: "system", content: createSystemPrompt(references) },
           { role: "user", content: composition },
         ],
       }),

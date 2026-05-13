@@ -150,6 +150,51 @@ export function listTopShampoos(limit = 3) {
   return rows.map(mapShampoo);
 }
 
+export type ShampooComparisonReference = {
+  label: string;
+  item: Shampoo;
+};
+
+function topByAudience(items: Shampoo[], audience: Audience, usedIds: Set<number>) {
+  return items.find((item) => item.fit.includes(audience) && !usedIds.has(item.id));
+}
+
+function closestToScore(items: Shampoo[], targetScore: number, usedIds: Set<number>) {
+  return items
+    .filter((item) => !usedIds.has(item.id))
+    .sort((a, b) => {
+      const distance = Math.abs(a.score - targetScore) - Math.abs(b.score - targetScore);
+      return distance || b.score - a.score || b.id - a.id;
+    })[0];
+}
+
+export function listComparisonShampoos() {
+  const rows = db
+    .prepare("SELECT * FROM shampoos WHERE status = 'published' ORDER BY score DESC, id DESC")
+    .all() as Record<string, unknown>[];
+  const items = rows.map(mapShampoo);
+  const usedIds = new Set<number>();
+  const references: ShampooComparisonReference[] = [];
+
+  const add = (label: string, item: Shampoo | undefined) => {
+    if (!item || usedIds.has(item.id)) {
+      return;
+    }
+
+    usedIds.add(item.id);
+    references.push({ label, item });
+  };
+
+  add("лидер для нормальной кожи головы", topByAudience(items, "normal", usedIds));
+  add("лидер для жирной кожи головы", topByAudience(items, "oily", usedIds));
+  add("лидер для чувствительной кожи головы", topByAudience(items, "sensitive", usedIds));
+  add("ориентир около 70 баллов", closestToScore(items, 70, usedIds));
+  add("ориентир около 60 баллов", closestToScore(items, 60, usedIds));
+  add("ориентир около 50 баллов", closestToScore(items, 50, usedIds));
+
+  return references;
+}
+
 export function saveAnalysis(params: {
   inputHash: string;
   composition: string;
