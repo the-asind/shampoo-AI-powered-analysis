@@ -18,6 +18,8 @@ SQLite выбран намеренно: для одной слабой VPS и к
 - `GET /api/shampoos?audience=normal|oily|sensitive`
 - `POST /api/analyze` `{ "composition": "...", "recaptchaToken": "..." }`
 - `POST /api/submissions` `{ "name": "...", "sourceUrl": "...", "composition": "...", "analysis": {...}, "recaptchaToken": "..." }`
+- `POST /api/visits` `{ "path": "/" }`
+- `GET /api/admin/summary`, `GET /api/admin/analyses`, `GET /api/admin/submissions` with `Authorization: Bearer $ADMIN_TOKEN`
 
 ## Локальный запуск
 
@@ -32,6 +34,7 @@ npm run dev
 Если в окружении явно задан `HTTPS_PROXY` или `HTTP_PROXY`, AI-запросы к OpenAI-compatible endpoint отправляются через этот прокси. Остальные backend-запросы этим кодом не проксируются.
 В production без `RECAPTCHA_SECRET_KEY` защищённые API-методы отклоняют запросы. Для frontend нужен `VITE_RECAPTCHA_SITE_KEY`.
 Для `/api/analyze` и `/api/submissions` действует квота по IP отдельно на каждое действие: по умолчанию 1 запрос в минуту и 10 запросов в сутки. Настройки: `RATE_LIMIT_PER_MINUTE`, `RATE_LIMIT_PER_DAY`.
+Админка доступна по `/admin`. Для неё нужен `ADMIN_TOKEN` в `.env`; токен вводится в UI и отправляется только как Bearer token к `/api/admin/*`. Посещения хранят не сырой IP, а SHA-256 хэш с `VISIT_HASH_SALT` или `ADMIN_TOKEN` как солью.
 
 Если запрос не дошёл до ИИ, смотри логи контейнера:
 
@@ -44,6 +47,15 @@ docker logs shampoo-asind-dev --tail 100
 - `recaptcha_failed` — запрос остановлен до ИИ; в поле `recaptcha.reason` будет причина, например `recaptcha_low_score`, `recaptcha_action_mismatch` или `recaptcha_request_error`.
 - `rate_limited` — сработала квота; в `rateLimit.reason` будет минутный или суточный лимит.
 - `AI analysis failed, using heuristic analysis` — reCAPTCHA и квота пройдены, но OpenAI-compatible endpoint не ответил; лог показывает `endpointHost`, `proxyEnabled`, `proxyHost`, `timeoutMs` и безопасный текст ошибки без ключей.
+- `AI analysis succeeded` и `analysis_completed` — ИИ ответил; `durationMs`, `aiMs` и `totalMs` показывают фактическую длительность.
+
+Если клиент видит `504 Gateway Time-out`, а в backend-логах позже появляется `analysis_completed`, значит nginx перестал ждать раньше, чем закончился ИИ-запрос. Например `aiMs: 72497` означает 72.5 секунды ожидания ИИ. В таком случае либо держи `OPENAI_TIMEOUT_MS` ниже nginx timeout, например `45000`, либо увеличивай nginx `proxy_read_timeout` для API.
+
+```nginx
+proxy_connect_timeout 10s;
+proxy_send_timeout 180s;
+proxy_read_timeout 180s;
+```
 
 Для reCAPTCHA v3 не стоит начинать с очень высокого порога. Разумный стартовый `RECAPTCHA_MIN_SCORE` — `0.5`, дальше порог лучше подбирать по реальным логам.
 

@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from "react";
-import { ArrowRight, CheckCircle2, ChevronDown, CircleHelp, Copy, Search } from "lucide-react";
+import { ArrowRight, BarChart3, CheckCircle2, ChevronDown, CircleHelp, Copy, Lock, RefreshCw, Search } from "lucide-react";
 import { mockShampoos } from "./server/mock-data";
 
 declare global {
@@ -38,6 +38,41 @@ type Analysis = {
   cons: string;
   leaderComparison: string;
   shouldSuggest: boolean;
+};
+
+type AdminSummary = {
+  totals: {
+    visits: number;
+    uniqueVisitors: number;
+    analyses: number;
+    submissions: number;
+    pendingSubmissions: number;
+    visitsToday: number;
+    analysesToday: number;
+  };
+  daily: Array<{ day: string; visits: number; analyses: number; submissions: number }>;
+  providerBreakdown: Array<{ provider: string; count: number }>;
+  scoreBuckets: Array<{ bucket: number; count: number }>;
+};
+
+type AdminAnalysis = {
+  id: number;
+  composition: string;
+  result: Analysis | null;
+  provider: string;
+  model: string;
+  promptVersion: string;
+  createdAt: string;
+};
+
+type AdminSubmission = {
+  id: number;
+  name: string;
+  sourceUrl: string;
+  composition: string;
+  analysis: Analysis | null;
+  status: string;
+  createdAt: string;
 };
 
 const fallbackShampoos: Shampoo[] = mockShampoos;
@@ -115,6 +150,19 @@ function hydrateShampoos(items: Shampoo[]) {
     ...item,
     inci: getInci(item),
   }));
+}
+
+function formatDateTime(value: string) {
+  return new Intl.DateTimeFormat("ru-RU", {
+    day: "2-digit",
+    month: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+  }).format(new Date(value));
+}
+
+function shortText(value: string, max = 220) {
+  return value.length > max ? `${value.slice(0, max).trim()}...` : value;
 }
 
 async function fetchJson<T>(url: string, init?: RequestInit): Promise<T> {
@@ -345,7 +393,194 @@ function Pill({ active, children, onClick }: { active: boolean; children: React.
   );
 }
 
+function AdminBars({ rows, valueKey }: { rows: Array<Record<string, string | number>>; valueKey: string }) {
+  const max = Math.max(1, ...rows.map((row) => Number(row[valueKey] ?? 0)));
+  const width = 560;
+  const height = 150;
+  const gap = 7;
+  const barWidth = Math.max(8, (width - gap * Math.max(0, rows.length - 1)) / Math.max(1, rows.length));
+
+  return (
+    <svg viewBox={`0 0 ${width} ${height}`} className="h-40 w-full overflow-visible">
+      {rows.map((row, index) => {
+        const value = Number(row[valueKey] ?? 0);
+        const barHeight = Math.max(2, (value / max) * 118);
+        const x = index * (barWidth + gap);
+        const y = 124 - barHeight;
+        return (
+          <g key={`${row.day ?? row.bucket ?? index}`}>
+            <rect x={x} y={y} width={barWidth} height={barHeight} rx="3" fill="#18181b" opacity={0.9} />
+            <text x={x + barWidth / 2} y="145" textAnchor="middle" fontSize="9" fill="#71717a">
+              {String(row.day ?? row.bucket).slice(-5)}
+            </text>
+          </g>
+        );
+      })}
+    </svg>
+  );
+}
+
+function AdminDashboard() {
+  const [token, setToken] = useState(() => localStorage.getItem("adminToken") ?? "");
+  const [draftToken, setDraftToken] = useState(token);
+  const [summary, setSummary] = useState<AdminSummary | null>(null);
+  const [analyses, setAnalyses] = useState<AdminAnalysis[]>([]);
+  const [submissions, setSubmissions] = useState<AdminSubmission[]>([]);
+  const [notice, setNotice] = useState("");
+  const [loading, setLoading] = useState(false);
+
+  async function loadAdminData(activeToken = token) {
+    if (!activeToken.trim()) {
+      setNotice("Нужен ADMIN_TOKEN.");
+      return;
+    }
+
+    setLoading(true);
+    setNotice("");
+    try {
+      const headers = { authorization: `Bearer ${activeToken.trim()}` };
+      const [summaryData, analysesData, submissionsData] = await Promise.all([
+        fetchJson<AdminSummary>("/api/admin/summary", { headers }),
+        fetchJson<{ items: AdminAnalysis[] }>("/api/admin/analyses?limit=80", { headers }),
+        fetchJson<{ items: AdminSubmission[] }>("/api/admin/submissions?limit=80", { headers }),
+      ]);
+      setSummary(summaryData);
+      setAnalyses(analysesData.items);
+      setSubmissions(submissionsData.items);
+      localStorage.setItem("adminToken", activeToken.trim());
+      setToken(activeToken.trim());
+    } catch {
+      setNotice("Админка не загрузилась. Проверь ADMIN_TOKEN и доступность API.");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  useEffect(() => {
+    if (token) {
+      void loadAdminData(token);
+    }
+  }, []);
+
+  const scoreRows = summary?.scoreBuckets.map((row) => ({ bucket: `${row.bucket}-${row.bucket + 9}`, count: row.count })) ?? [];
+
+  return (
+    <main className="min-h-screen bg-[#fafafa] text-zinc-950">
+      <section className="mx-auto max-w-[1180px] px-5 py-8 sm:px-8">
+        <div className="flex flex-col gap-5 border-b border-zinc-200 pb-6 md:flex-row md:items-end md:justify-between">
+          <div>
+            <div className="mb-4 inline-flex h-8 items-center gap-2 rounded-full bg-zinc-950 px-4 text-sm font-medium text-white">
+              <Lock className="h-4 w-4" />
+              admin
+            </div>
+            <h1 className="text-4xl font-semibold tracking-tight text-zinc-950">Админка shampoo.asind.dev</h1>
+            <p className="mt-2 text-sm text-zinc-500">Посещения, AI-разборы и предложения из SQLite.</p>
+          </div>
+          <div className="flex w-full flex-col gap-2 sm:w-auto sm:flex-row">
+            <input
+              value={draftToken}
+              onChange={(event) => setDraftToken(event.target.value)}
+              type="password"
+              className="h-10 min-w-[260px] rounded-md border border-zinc-200 bg-white px-3 text-sm outline-none focus:ring-4 focus:ring-zinc-100"
+              placeholder="ADMIN_TOKEN"
+            />
+            <button onClick={() => void loadAdminData(draftToken)} className="inline-flex h-10 items-center justify-center gap-2 rounded-full bg-zinc-950 px-4 text-sm font-medium text-white">
+              <RefreshCw className={`h-4 w-4 ${loading ? "animate-spin" : ""}`} />
+              Обновить
+            </button>
+          </div>
+        </div>
+
+        {notice && <div className="mt-4 rounded-md border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800">{notice}</div>}
+
+        <div className="mt-6 grid gap-3 sm:grid-cols-2 lg:grid-cols-6">
+          {[
+            ["визиты", summary?.totals.visits],
+            ["уники", summary?.totals.uniqueVisitors],
+            ["визиты сегодня", summary?.totals.visitsToday],
+            ["анализы", summary?.totals.analyses],
+            ["анализы сегодня", summary?.totals.analysesToday],
+            ["предложения", summary?.totals.pendingSubmissions],
+          ].map(([label, value]) => (
+            <div key={String(label)} className="rounded-lg border border-zinc-200 bg-white p-4">
+              <div className="text-xs font-medium uppercase tracking-[0.14em] text-zinc-400">{label}</div>
+              <div className="mt-2 text-3xl font-semibold tabular-nums">{value ?? "—"}</div>
+            </div>
+          ))}
+        </div>
+
+        <div className="mt-5 grid gap-5 lg:grid-cols-[1.5fr_1fr]">
+          <section className="rounded-lg border border-zinc-200 bg-white p-5">
+            <div className="mb-4 flex items-center gap-2 text-sm font-semibold">
+              <BarChart3 className="h-4 w-4" />
+              Визиты по дням
+            </div>
+            <AdminBars rows={summary?.daily ?? []} valueKey="visits" />
+          </section>
+          <section className="rounded-lg border border-zinc-200 bg-white p-5">
+            <div className="mb-4 text-sm font-semibold">Оценки анализов</div>
+            <AdminBars rows={scoreRows} valueKey="count" />
+          </section>
+        </div>
+
+        <div className="mt-5 grid gap-5 lg:grid-cols-[1fr_1fr]">
+          <section className="rounded-lg border border-zinc-200 bg-white p-5">
+            <h2 className="text-lg font-semibold">Последние анализы</h2>
+            <div className="mt-4 space-y-3">
+              {analyses.map((item) => (
+                <article key={item.id} className="rounded-md border border-zinc-100 bg-zinc-50 p-4">
+                  <div className="flex flex-wrap items-center justify-between gap-3">
+                    <div className="text-sm font-medium">{item.result?.title ?? "Без результата"}</div>
+                    <div className="text-sm font-semibold tabular-nums">{item.result?.score ?? "—"}</div>
+                  </div>
+                  <div className="mt-1 text-xs text-zinc-400">{formatDateTime(item.createdAt)} · {item.provider} · {item.model}</div>
+                  <p className="mt-3 text-sm leading-6 text-zinc-600">{shortText(item.composition)}</p>
+                  {item.result?.verdict && <p className="mt-2 text-sm leading-6 text-zinc-800">{shortText(item.result.verdict, 260)}</p>}
+                </article>
+              ))}
+              {analyses.length === 0 && <p className="text-sm text-zinc-500">Пока пусто.</p>}
+            </div>
+          </section>
+
+          <section className="rounded-lg border border-zinc-200 bg-white p-5">
+            <h2 className="text-lg font-semibold">Предложения</h2>
+            <div className="mt-4 space-y-3">
+              {submissions.map((item) => (
+                <article key={item.id} className="rounded-md border border-zinc-100 bg-zinc-50 p-4">
+                  <div className="flex flex-wrap items-center justify-between gap-3">
+                    <a href={item.sourceUrl} target="_blank" rel="noreferrer" className="text-sm font-medium text-zinc-950 hover:underline">{item.name}</a>
+                    <span className="rounded-full bg-white px-2.5 py-1 text-xs text-zinc-500 ring-1 ring-zinc-200">{item.status}</span>
+                  </div>
+                  <div className="mt-1 text-xs text-zinc-400">{formatDateTime(item.createdAt)} · score {item.analysis?.score ?? "—"}</div>
+                  <p className="mt-3 text-sm leading-6 text-zinc-600">{shortText(item.composition)}</p>
+                  {item.analysis?.verdict && <p className="mt-2 text-sm leading-6 text-zinc-800">{shortText(item.analysis.verdict, 260)}</p>}
+                </article>
+              ))}
+              {submissions.length === 0 && <p className="text-sm text-zinc-500">Пока пусто.</p>}
+            </div>
+          </section>
+        </div>
+
+        <section className="mt-5 rounded-lg border border-zinc-200 bg-white p-5">
+          <h2 className="text-lg font-semibold">Провайдеры</h2>
+          <div className="mt-4 flex flex-wrap gap-2">
+            {(summary?.providerBreakdown ?? []).map((item) => (
+              <span key={item.provider} className="rounded-full bg-zinc-100 px-3 py-1.5 text-sm text-zinc-700">
+                {item.provider}: {item.count}
+              </span>
+            ))}
+          </div>
+        </section>
+      </section>
+    </main>
+  );
+}
+
 export default function ShampooLanding() {
+  return window.location.pathname.startsWith("/admin") ? <AdminDashboard /> : <PublicLanding />;
+}
+
+function PublicLanding() {
   const [activeTab, setActiveTab] = useState<Audience>("normal");
   const [ratingItems, setRatingItems] = useState<Shampoo[]>(fallbackShampoos);
   const [expandedId, setExpandedId] = useState<number | null>(null);
@@ -382,6 +617,19 @@ export default function ShampooLanding() {
 
   useEffect(() => {
     loadRecaptchaScript(recaptchaSiteKey);
+  }, []);
+
+  useEffect(() => {
+    const key = "shampooVisitTracked";
+    if (sessionStorage.getItem(key)) {
+      return;
+    }
+
+    sessionStorage.setItem(key, "1");
+    fetchJson("/api/visits", {
+      method: "POST",
+      body: JSON.stringify({ path: window.location.pathname || "/" }),
+    }).catch(() => undefined);
   }, []);
 
   const filtered = useMemo(

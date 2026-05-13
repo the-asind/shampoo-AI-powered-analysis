@@ -1,5 +1,6 @@
 import Database from "better-sqlite3";
 import dotenv from "dotenv";
+import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import type { Audience, IngredientAnalysis, Shampoo } from "./types.js";
@@ -79,6 +80,21 @@ db.exec(`
 
   CREATE INDEX IF NOT EXISTS idx_rate_limits_lookup
     ON rate_limits(client_ip, action, window_start);
+
+  CREATE TABLE IF NOT EXISTS visits (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    client_ip TEXT NOT NULL,
+    path TEXT NOT NULL DEFAULT '/',
+    referrer TEXT NOT NULL DEFAULT '',
+    user_agent TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_visits_created
+    ON visits(created_at DESC);
+
+  CREATE INDEX IF NOT EXISTS idx_visits_path_created
+    ON visits(path, created_at DESC);
 `);
 
 const shampooColumns = db.prepare("PRAGMA table_info(shampoos)").all() as Array<{ name: string }>;
@@ -214,6 +230,161 @@ export function saveAnalysis(params: {
     model: params.model,
     promptVersion: params.promptVersion,
   });
+}
+
+function parseAnalysis(value: string): IngredientAnalysis | null {
+  try {
+    return JSON.parse(value) as IngredientAnalysis;
+  } catch {
+    return null;
+  }
+}
+
+function mapAnalysisRow(row: Record<string, unknown>) {
+  return {
+    id: Number(row.id),
+    inputHash: String(row.input_hash),
+    composition: String(row.composition),
+    result: parseAnalysis(String(row.result_json)),
+    provider: String(row.provider),
+    model: String(row.model),
+    promptVersion: String(row.prompt_version),
+    createdAt: String(row.created_at),
+  };
+}
+
+function mapSubmissionRow(row: Record<string, unknown>) {
+  return {
+    id: Number(row.id),
+    name: String(row.name),
+    sourceUrl: String(row.source_url),
+    composition: String(row.composition),
+    analysis: parseAnalysis(String(row.analysis_json)),
+    status: String(row.status),
+    createdAt: String(row.created_at),
+  };
+}
+
+function sqliteDateModifier(days: number) {
+  return `-${Math.max(1, Math.min(90, Math.round(days)))} days`;
+}
+
+export function recordVisit(params: {
+  clientIp: string;
+  path: string;
+  referrer: string;
+  userAgent: string;
+}) {
+  const ipHash = crypto
+    .createHash("sha256")
+    .update(`${process.env.VISIT_HASH_SALT ?? process.env.ADMIN_TOKEN ?? "shampoo"}:${params.clientIp}`)
+    .digest("hex");
+
+  db.prepare(`
+    INSERT INTO visits (client_ip, path, referrer, user_agent)
+    VALUES (@clientIp, @path, @referrer, @userAgent)
+  `).run({
+    clientIp: ipHash,
+    path: params.path.slice(0, 240) || "/",
+    referrer: params.referrer.slice(0, 500),
+    userAgent: params.userAgent.slice(0, 500),
+  });
+}
+
+export function getAdminSummary(days = 14) {
+  const dateModifier = sqliteDateModifier(days);
+  const totals = db.prepare(`
+    SELECT
+      (SELECT COUNT(*) FROM visits) AS visits,
+      (SELECT COUNT(DISTINCT client_ip) FROM visits) AS uniqueVisitors,
+      (SELECT COUNT(*) FROM analyses) AS analyses,
+      (SELECT COUNT(*) FROM submissions) AS submissions,
+      (SELECT COUNT(*) FROM submissions WHERE status = 'pending') AS pendingSubmissions,
+      (SELECT COUNT(*) FROM visits WHERE created_at >= datetime('now', 'start of day')) AS visitsToday,
+      (SELECT COUNT(*) FROM analyses WHERE created_at >= datetime('now', 'start of day')) AS analysesToday
+  `).get() as Record<string, number>;
+
+  const daily = db.prepare(`
+    WITH RECURSIVE dates(day) AS (
+      SELECT date('now', ?)
+      UNION ALL
+      SELECT date(day, '+1 day') FROM dates WHERE day < date('now')
+    )
+    SELECT
+      dates.day,
+      COALESCE(visits.count, 0) AS visits,
+      COALESCE(analyses.count, 0) AS analyses,
+      COALESCE(submissions.count, 0) AS submissions
+    FROM dates
+    LEFT JOIN (
+      SELECT date(created_at) AS day, COUNT(*) AS count
+      FROM visits
+      WHERE created_at >= datetime('now', ?)
+      GROUP BY day
+    ) visits ON visits.day = dates.day
+    LEFT JOIN (
+      SELECT date(created_at) AS day, COUNT(*) AS count
+      FROM analyses
+      WHERE created_at >= datetime('now', ?)
+      GROUP BY day
+    ) analyses ON analyses.day = dates.day
+    LEFT JOIN (
+      SELECT date(created_at) AS day, COUNT(*) AS count
+      FROM submissions
+      WHERE created_at >= datetime('now', ?)
+      GROUP BY day
+    ) submissions ON submissions.day = dates.day
+    ORDER BY dates.day
+  `).all(dateModifier, dateModifier, dateModifier, dateModifier) as Array<Record<string, unknown>>;
+
+  const providerBreakdown = db.prepare(`
+    SELECT provider, COUNT(*) AS count
+    FROM analyses
+    GROUP BY provider
+    ORDER BY count DESC
+  `).all() as Array<Record<string, unknown>>;
+
+  const scoreBuckets = db.prepare(`
+    SELECT
+      CAST((CAST(json_extract(result_json, '$.score') AS INTEGER) / 10) * 10 AS INTEGER) AS bucket,
+      COUNT(*) AS count
+    FROM analyses
+    WHERE json_valid(result_json)
+    GROUP BY bucket
+    ORDER BY bucket
+  `).all() as Array<Record<string, unknown>>;
+
+  return {
+    totals,
+    daily: daily.map((row) => ({
+      day: String(row.day),
+      visits: Number(row.visits),
+      analyses: Number(row.analyses),
+      submissions: Number(row.submissions),
+    })),
+    providerBreakdown: providerBreakdown.map((row) => ({
+      provider: String(row.provider),
+      count: Number(row.count),
+    })),
+    scoreBuckets: scoreBuckets.map((row) => ({
+      bucket: Number(row.bucket),
+      count: Number(row.count),
+    })),
+  };
+}
+
+export function listAnalyses(limit = 100, offset = 0) {
+  const rows = db
+    .prepare("SELECT * FROM analyses ORDER BY created_at DESC, id DESC LIMIT ? OFFSET ?")
+    .all(Math.max(1, Math.min(500, limit)), Math.max(0, offset)) as Record<string, unknown>[];
+  return rows.map(mapAnalysisRow);
+}
+
+export function listSubmissions(limit = 100, offset = 0) {
+  const rows = db
+    .prepare("SELECT * FROM submissions ORDER BY created_at DESC, id DESC LIMIT ? OFFSET ?")
+    .all(Math.max(1, Math.min(500, limit)), Math.max(0, offset)) as Record<string, unknown>[];
+  return rows.map(mapSubmissionRow);
 }
 
 export function createSubmission(params: {

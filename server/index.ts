@@ -6,7 +6,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { z } from "zod";
 import { analyzeWithAi, hashComposition, PROMPT_VERSION } from "./ai.js";
-import { checkRateLimit, createSubmission, listComparisonShampoos, listShampoos, saveAnalysis } from "./db.js";
+import { checkRateLimit, createSubmission, getAdminSummary, listAnalyses, listComparisonShampoos, listShampoos, listSubmissions, recordVisit, saveAnalysis } from "./db.js";
 import { verifyRecaptcha } from "./recaptcha.js";
 
 dotenv.config();
@@ -44,9 +44,47 @@ function sendRateLimit(reply: { header: (name: string, value: string) => unknown
   });
 }
 
+function isAdminRequest(request: { headers: Record<string, unknown> }) {
+  const token = process.env.ADMIN_TOKEN?.trim();
+  if (!token) {
+    return false;
+  }
+
+  const authorization = request.headers.authorization;
+  const headerToken = request.headers["x-admin-token"];
+  const provided = typeof authorization === "string" && authorization.startsWith("Bearer ")
+    ? authorization.slice("Bearer ".length).trim()
+    : typeof headerToken === "string"
+      ? headerToken.trim()
+      : "";
+
+  return provided === token;
+}
+
+function requireAdmin(request: { headers: Record<string, unknown> }, reply: { code: (statusCode: number) => { send: (payload: unknown) => unknown } }) {
+  if (!process.env.ADMIN_TOKEN?.trim()) {
+    return reply.code(503).send({ error: "admin_not_configured" });
+  }
+
+  if (!isAdminRequest(request)) {
+    return reply.code(401).send({ error: "admin_unauthorized" });
+  }
+
+  return null;
+}
+
 const AnalyzeBodySchema = z.object({
   composition: z.string().trim().min(20).max(12000),
   recaptchaToken: z.string().trim().min(1).optional(),
+});
+
+const VisitBodySchema = z.object({
+  path: z.string().trim().min(1).max(240).default("/"),
+});
+
+const AdminListQuerySchema = z.object({
+  limit: z.coerce.number().int().min(1).max(500).default(100),
+  offset: z.coerce.number().int().min(0).default(0),
 });
 
 const SubmissionBodySchema = z.object({
@@ -92,6 +130,59 @@ app.get("/api/shampoos", async (request, reply) => {
   }
 
   return { items: listShampoos(query.data.audience) };
+});
+
+app.post("/api/visits", async (request, reply) => {
+  const body = VisitBodySchema.safeParse(request.body);
+  if (!body.success) {
+    return reply.code(400).send({ error: "invalid_body" });
+  }
+
+  recordVisit({
+    clientIp: getClientIp(request),
+    path: body.data.path,
+    referrer: typeof request.headers.referer === "string" ? request.headers.referer : "",
+    userAgent: typeof request.headers["user-agent"] === "string" ? request.headers["user-agent"] : "",
+  });
+
+  return reply.code(204).send();
+});
+
+app.get("/api/admin/summary", async (request, reply) => {
+  const unauthorized = requireAdmin(request, reply);
+  if (unauthorized) {
+    return unauthorized;
+  }
+
+  return getAdminSummary();
+});
+
+app.get("/api/admin/analyses", async (request, reply) => {
+  const unauthorized = requireAdmin(request, reply);
+  if (unauthorized) {
+    return unauthorized;
+  }
+
+  const query = AdminListQuerySchema.safeParse(request.query);
+  if (!query.success) {
+    return reply.code(400).send({ error: "invalid_query" });
+  }
+
+  return { items: listAnalyses(query.data.limit, query.data.offset) };
+});
+
+app.get("/api/admin/submissions", async (request, reply) => {
+  const unauthorized = requireAdmin(request, reply);
+  if (unauthorized) {
+    return unauthorized;
+  }
+
+  const query = AdminListQuerySchema.safeParse(request.query);
+  if (!query.success) {
+    return reply.code(400).send({ error: "invalid_query" });
+  }
+
+  return { items: listSubmissions(query.data.limit, query.data.offset) };
 });
 
 app.post("/api/analyze", async (request, reply) => {
