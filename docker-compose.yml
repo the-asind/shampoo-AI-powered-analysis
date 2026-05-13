@@ -1,0 +1,32 @@
+services:
+  app:
+    build:
+      context: .
+      args:
+        VITE_RECAPTCHA_SITE_KEY: ${VITE_RECAPTCHA_SITE_KEY:-}
+        VITE_AUTHOR_URL: ${VITE_AUTHOR_URL:-}
+    image: shampoo-asind-dev:local
+    container_name: shampoo-asind-dev
+    env_file:
+      - .env
+    environment:
+      NODE_ENV: production
+      HOST: 0.0.0.0
+      PORT: 3000
+      DATABASE_PATH: /app/data/shampoo.sqlite
+      NODE_OPTIONS: --max-old-space-size=128
+    ports:
+      - "127.0.0.1:3001:3000"
+    volumes:
+      - shampoo-data:/app/data
+    restart: unless-stopped
+    mem_limit: 256m
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000/api/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+volumes:
+  shampoo-data:

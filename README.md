@@ -34,8 +34,10 @@ npm run dev
 ## Production
 
 ```bash
-docker build -t shampoo-asind-dev .
-docker run --rm -p 3000:3000 --env-file .env -v shampoo-data:/app/data shampoo-asind-dev
+cp .env.example .env
+docker compose up -d --build
 ```
+
+По умолчанию приложение слушает `127.0.0.1:3001` на хосте.
 
 Для Kubernetes см. `k8s/deployment.yaml`. Перед применением замените image и secret.
