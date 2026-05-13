@@ -14,8 +14,8 @@ type AiFetchOptions = NonNullable<Parameters<typeof undiciFetch>[1]>;
 
 const AnalysisSchema = z.object({
   score: z.number().int().min(0).max(100),
-  title: z.string().min(3).max(90),
-  verdict: z.string().min(20).max(700),
+  title: z.string().min(3).max(140),
+  verdict: z.string().max(1600),
   tone: z.enum(["good", "watch", "weak", "empty"]),
   confidence: z.enum(["высокая", "средняя", "низкая"]),
   shampooType: z.enum([
@@ -28,9 +28,9 @@ const AnalysisSchema = z.object({
     "подозрительный состав",
     "не рекомендуется",
   ]),
-  pros: z.string().min(10).max(700),
-  cons: z.string().min(10).max(700),
-  leaderComparison: z.string().min(20).max(900),
+  pros: z.string().max(2400),
+  cons: z.string().max(2400),
+  leaderComparison: z.string().max(1800),
   shouldSuggest: z.boolean(),
 });
 
@@ -51,10 +51,13 @@ const responseFormat = {
         },
         title: {
           type: "string",
+          minLength: 3,
+          maxLength: 140,
           description: "Короткий заголовок результата для UI.",
         },
         verdict: {
           type: "string",
+          maxLength: 1600,
           description: "Краткий вердикт простым языком: хороший/средний/плохой кандидат и кому он подходит.",
         },
         tone: {
@@ -83,14 +86,17 @@ const responseFormat = {
         },
         pros: {
           type: "string",
+          maxLength: 2400,
           description: "Главные плюсы одним связным текстом, без markdown-списка.",
         },
         cons: {
           type: "string",
+          maxLength: 2400,
           description: "Главные минусы одним связным текстом, без markdown-списка.",
         },
         leaderComparison: {
           type: "string",
+          maxLength: 1800,
           description: "Сравнение с текущими лидерами списка простым языком.",
         },
         shouldSuggest: {
@@ -264,6 +270,10 @@ function clampAnalysis(input: IngredientAnalysis): IngredientAnalysis {
   return {
     ...input,
     score,
+    verdict: input.verdict.trim() || "Состав разобран, но модель не дала отдельный краткий вердикт.",
+    pros: input.pros.trim() || "Модель не выделила отдельные плюсы состава.",
+    cons: input.cons.trim() || "Модель не выделила отдельные минусы состава.",
+    leaderComparison: input.leaderComparison.trim() || "Модель не дала отдельное сравнение с лидерами, но оценка рассчитана по той же методике.",
     tone: score >= 80 ? "good" : score >= 60 ? "watch" : "weak",
     shouldSuggest: score >= 80 && input.confidence !== "низкая" && input.shouldSuggest,
   };
