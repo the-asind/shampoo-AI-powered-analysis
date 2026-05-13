@@ -356,6 +356,7 @@ export async function analyzeWithAi(
   const model = process.env.OPENAI_MODEL ?? "gpt-4o-mini";
   const aiUrl = buildOpenAiUrl();
   const proxyUrl = getProxyUrl();
+  const startedAt = Date.now();
 
   if (!apiKey || !process.env.OPENAI_BASE_URL) {
     logger?.warn(
@@ -403,8 +404,22 @@ export async function analyzeWithAi(
       throw new Error("AI response is empty");
     }
 
+    const parsed = clampAnalysis(AnalysisSchema.parse(extractJson(content)));
+    logger?.info?.(
+      {
+        provider: "openai-compatible",
+        model,
+        endpointHost: publicUrlLabel(aiUrl),
+        proxyEnabled: Boolean(proxyUrl),
+        proxyHost: publicUrlLabel(proxyUrl),
+        durationMs: Date.now() - startedAt,
+        score: parsed.score,
+      },
+      "AI analysis succeeded",
+    );
+
     return {
-      result: clampAnalysis(AnalysisSchema.parse(extractJson(content))),
+      result: parsed,
       provider: "openai-compatible",
       model,
     };
@@ -417,6 +432,7 @@ export async function analyzeWithAi(
         proxyEnabled: Boolean(proxyUrl),
         proxyHost: publicUrlLabel(proxyUrl),
         timeoutMs: timeout,
+        durationMs: Date.now() - startedAt,
         error: errorPayload(error),
       },
       "AI analysis failed, using heuristic analysis",

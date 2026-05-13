@@ -95,26 +95,37 @@ app.get("/api/shampoos", async (request, reply) => {
 });
 
 app.post("/api/analyze", async (request, reply) => {
+  const startedAt = Date.now();
   const body = AnalyzeBodySchema.safeParse(request.body);
   if (!body.success) {
     return reply.code(400).send({ error: "invalid_body", details: body.error.flatten() });
   }
 
   const clientIp = getClientIp(request);
+  const recaptchaStartedAt = Date.now();
   const recaptcha = await verifyRecaptcha(body.data.recaptchaToken, "analyze");
+  const recaptchaMs = Date.now() - recaptchaStartedAt;
   if (!recaptcha.ok) {
-    request.log.warn({ action: "analyze", clientIp, recaptcha }, "recaptcha_failed");
+    request.log.warn({ action: "analyze", clientIp, recaptchaMs, totalMs: Date.now() - startedAt, recaptcha }, "recaptcha_failed");
     return reply.code(403).send({ error: "recaptcha_failed", details: recaptcha });
   }
 
+  const rateLimitStartedAt = Date.now();
   const rateLimit = checkRateLimit({ clientIp, action: "analyze" });
+  const rateLimitMs = Date.now() - rateLimitStartedAt;
   const rateLimited = sendRateLimit(reply, rateLimit);
   if (rateLimited) {
-    request.log.warn({ action: "analyze", clientIp, rateLimit }, "rate_limited");
+    request.log.warn({ action: "analyze", clientIp, recaptchaMs, rateLimitMs, totalMs: Date.now() - startedAt, rateLimit }, "rate_limited");
     return rateLimited;
   }
 
-  const { result, provider, model } = await analyzeWithAi(body.data.composition, listComparisonShampoos(), request.log);
+  const referencesStartedAt = Date.now();
+  const references = listComparisonShampoos();
+  const referencesMs = Date.now() - referencesStartedAt;
+  const aiStartedAt = Date.now();
+  const { result, provider, model } = await analyzeWithAi(body.data.composition, references, request.log);
+  const aiMs = Date.now() - aiStartedAt;
+  const saveStartedAt = Date.now();
   saveAnalysis({
     inputHash: hashComposition(body.data.composition),
     composition: body.data.composition,
@@ -123,8 +134,21 @@ app.post("/api/analyze", async (request, reply) => {
     model,
     promptVersion: PROMPT_VERSION,
   });
+  const saveMs = Date.now() - saveStartedAt;
 
-  request.log.info({ action: "analyze", clientIp, provider, model, score: result.score }, "analysis_completed");
+  request.log.info({
+    action: "analyze",
+    clientIp,
+    provider,
+    model,
+    score: result.score,
+    recaptchaMs,
+    rateLimitMs,
+    referencesMs,
+    aiMs,
+    saveMs,
+    totalMs: Date.now() - startedAt,
+  }, "analysis_completed");
   return { result, provider, model, promptVersion: PROMPT_VERSION };
 });
 
