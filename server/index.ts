@@ -6,7 +6,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { z } from "zod";
 import { analyzeWithAi, hashComposition, PROMPT_VERSION } from "./ai.js";
-import { createSubmission, listShampoos, listTopShampoos, saveAnalysis } from "./db.js";
+import { checkRateLimit, createSubmission, listShampoos, listTopShampoos, saveAnalysis } from "./db.js";
 import { verifyRecaptcha } from "./recaptcha.js";
 
 dotenv.config();
@@ -21,6 +21,28 @@ await app.register(cors, {
 });
 
 const AudienceSchema = z.enum(["normal", "oily", "sensitive"]);
+
+function getClientIp(request: { ip: string; headers: Record<string, unknown> }) {
+  const forwardedFor = request.headers["x-forwarded-for"];
+  if (typeof forwardedFor === "string" && forwardedFor.trim()) {
+    return forwardedFor.split(",")[0]?.trim() || request.ip;
+  }
+
+  return request.ip;
+}
+
+function sendRateLimit(reply: { header: (name: string, value: string) => unknown; code: (statusCode: number) => { send: (payload: unknown) => unknown } }, limit: ReturnType<typeof checkRateLimit>) {
+  if (limit.allowed) {
+    return null;
+  }
+
+  reply.header("Retry-After", String(limit.retryAfterSeconds));
+  return reply.code(429).send({
+    error: "rate_limited",
+    reason: limit.reason,
+    retryAfterSeconds: limit.retryAfterSeconds,
+  });
+}
 
 const AnalyzeBodySchema = z.object({
   composition: z.string().trim().min(20).max(12000),
@@ -78,6 +100,12 @@ app.post("/api/analyze", async (request, reply) => {
     return reply.code(400).send({ error: "invalid_body", details: body.error.flatten() });
   }
 
+  const rateLimit = checkRateLimit({ clientIp: getClientIp(request), action: "analyze" });
+  const rateLimited = sendRateLimit(reply, rateLimit);
+  if (rateLimited) {
+    return rateLimited;
+  }
+
   const recaptcha = await verifyRecaptcha(body.data.recaptchaToken, "analyze");
   if (!recaptcha.ok) {
     return reply.code(403).send({ error: "recaptcha_failed", details: recaptcha });
@@ -100,6 +128,12 @@ app.post("/api/submissions", async (request, reply) => {
   const body = SubmissionBodySchema.safeParse(request.body);
   if (!body.success) {
     return reply.code(400).send({ error: "invalid_body", details: body.error.flatten() });
+  }
+
+  const rateLimit = checkRateLimit({ clientIp: getClientIp(request), action: "submit_shampoo" });
+  const rateLimited = sendRateLimit(reply, rateLimit);
+  if (rateLimited) {
+    return rateLimited;
   }
 
   const recaptcha = await verifyRecaptcha(body.data.recaptchaToken, "submit_shampoo");

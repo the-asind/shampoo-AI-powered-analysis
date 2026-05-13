@@ -15,6 +15,8 @@ services:
       PORT: 3000
       DATABASE_PATH: /app/data/shampoo.sqlite
       NODE_OPTIONS: --max-old-space-size=128
+      RATE_LIMIT_PER_MINUTE: ${RATE_LIMIT_PER_MINUTE:-1}
+      RATE_LIMIT_PER_DAY: ${RATE_LIMIT_PER_DAY:-10}
     ports:
       - "127.0.0.1:3001:3000"
     volumes:

@@ -127,10 +127,40 @@ async function fetchJson<T>(url: string, init?: RequestInit): Promise<T> {
   });
 
   if (!response.ok) {
-    throw new Error(`Request failed: ${response.status}`);
+    let payload: unknown = null;
+    try {
+      payload = await response.json();
+    } catch {
+      payload = null;
+    }
+
+    const error = new Error(`Request failed: ${response.status}`);
+    Object.assign(error, { status: response.status, payload });
+    throw error;
   }
 
   return response.json() as Promise<T>;
+}
+
+function isHttpError(error: unknown): error is Error & { status: number; payload?: { retryAfterSeconds?: number; reason?: string } } {
+  return error instanceof Error && typeof (error as { status?: unknown }).status === "number";
+}
+
+function formatRateLimitNotice(error: unknown) {
+  if (!isHttpError(error) || error.status !== 429) {
+    return "";
+  }
+
+  const retryAfterSeconds = error.payload?.retryAfterSeconds;
+  if (error.payload?.reason === "daily_quota_exceeded") {
+    return "Достигнут лимит: 10 запросов в сутки для этого IP.";
+  }
+
+  if (typeof retryAfterSeconds === "number") {
+    return `Слишком часто. Повтори через ${retryAfterSeconds} сек.`;
+  }
+
+  return "Слишком часто. Для этого действия доступен один запрос в минуту.";
 }
 
 function loadRecaptchaScript(siteKey: string) {
@@ -340,9 +370,14 @@ export default function ShampooLanding() {
       if (data.provider === "heuristic") {
         setApiNotice("ИИ-эндпоинт не настроен, использованы локальные правила.");
       }
-    } catch {
-      setServerAnalysis(localAnalyze(composition));
-      setApiNotice("ИИ не ответил, показан предварительный локальный разбор.");
+    } catch (error) {
+      const rateLimitNotice = formatRateLimitNotice(error);
+      if (rateLimitNotice) {
+        setApiNotice(rateLimitNotice);
+      } else {
+        setServerAnalysis(localAnalyze(composition));
+        setApiNotice("ИИ не ответил, показан предварительный локальный разбор.");
+      }
     } finally {
       setIsAnalyzing(false);
     }
@@ -372,9 +407,9 @@ export default function ShampooLanding() {
       });
       setProposalSent(true);
       setApiNotice("");
-    } catch {
+    } catch (error) {
       setProposalSent(false);
-      setApiNotice("Заявка не отправлена. Проверь ссылку, капча-проверку и доступность API.");
+      setApiNotice(formatRateLimitNotice(error) || "Заявка не отправлена. Проверь ссылку, капча-проверку и доступность API.");
     }
   }
 

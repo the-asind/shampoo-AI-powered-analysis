@@ -30,6 +30,7 @@ npm run dev
 
 Если `OPENAI_API_KEY` не задан, backend использует локальные эвристические правила и все равно сохраняет результат в SQLite.
 В production без `RECAPTCHA_SECRET_KEY` защищённые API-методы отклоняют запросы. Для frontend нужен `VITE_RECAPTCHA_SITE_KEY`.
+Для `/api/analyze` и `/api/submissions` действует квота по IP отдельно на каждое действие: по умолчанию 1 запрос в минуту и 10 запросов в сутки. Настройки: `RATE_LIMIT_PER_MINUTE`, `RATE_LIMIT_PER_DAY`.
 
 ## Production
 
@@ -38,6 +39,13 @@ cp .env.example .env
 docker compose up -d --build
 ```
 
-По умолчанию приложение слушает `127.0.0.1:3001` на хосте.
+По умолчанию приложение слушает `127.0.0.1:3001` на хосте. Nginx можно проксировать на `http://127.0.0.1:3001`.
+Для корректных IP-квот nginx должен передавать адрес клиента:
+
+```nginx
+proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+proxy_set_header X-Real-IP $remote_addr;
+proxy_set_header Host $host;
+```
 
 Для Kubernetes см. `k8s/deployment.yaml`. Перед применением замените image и secret.

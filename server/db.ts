@@ -66,6 +66,19 @@ db.exec(`
 
   CREATE INDEX IF NOT EXISTS idx_submissions_status_created
     ON submissions(status, created_at DESC);
+
+  CREATE TABLE IF NOT EXISTS rate_limits (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    client_ip TEXT NOT NULL,
+    action TEXT NOT NULL,
+    window_start INTEGER NOT NULL,
+    count INTEGER NOT NULL DEFAULT 1,
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(client_ip, action, window_start)
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_rate_limits_lookup
+    ON rate_limits(client_ip, action, window_start);
 `);
 
 const shampooColumns = db.prepare("PRAGMA table_info(shampoos)").all() as Array<{ name: string }>;
@@ -179,4 +192,62 @@ export function createSubmission(params: {
     });
 
   return { id: Number(result.lastInsertRowid), status: "pending" };
+}
+
+export function checkRateLimit(params: {
+  clientIp: string;
+  action: "analyze" | "submit_shampoo";
+  now?: number;
+}) {
+  const now = params.now ?? Date.now();
+  const minuteMs = 60_000;
+  const dayMs = 24 * 60 * 60 * 1000;
+  const perMinute = Number(process.env.RATE_LIMIT_PER_MINUTE ?? 1);
+  const perDay = Number(process.env.RATE_LIMIT_PER_DAY ?? 10);
+  const minuteWindow = Math.floor(now / minuteMs) * minuteMs;
+  const dayWindow = Math.floor(now / dayMs) * dayMs;
+
+  db.prepare("DELETE FROM rate_limits WHERE window_start < ?").run(dayWindow - dayMs);
+
+  const apply = db.transaction(() => {
+    const minuteRow = db
+      .prepare("SELECT count FROM rate_limits WHERE client_ip = ? AND action = ? AND window_start = ?")
+      .get(params.clientIp, `${params.action}:minute`, minuteWindow) as { count: number } | undefined;
+    if ((minuteRow?.count ?? 0) >= perMinute) {
+      return {
+        allowed: false,
+        reason: "minute_quota_exceeded",
+        retryAfterSeconds: Math.max(1, Math.ceil((minuteWindow + minuteMs - now) / 1000)),
+      };
+    }
+
+    const dayRow = db
+      .prepare("SELECT count FROM rate_limits WHERE client_ip = ? AND action = ? AND window_start = ?")
+      .get(params.clientIp, `${params.action}:day`, dayWindow) as { count: number } | undefined;
+    if ((dayRow?.count ?? 0) >= perDay) {
+      return {
+        allowed: false,
+        reason: "daily_quota_exceeded",
+        retryAfterSeconds: Math.max(1, Math.ceil((dayWindow + dayMs - now) / 1000)),
+      };
+    }
+
+    db.prepare(`
+      INSERT INTO rate_limits (client_ip, action, window_start, count)
+      VALUES (?, ?, ?, 1)
+      ON CONFLICT(client_ip, action, window_start)
+      DO UPDATE SET count = count + 1, updated_at = CURRENT_TIMESTAMP
+    `).run(params.clientIp, `${params.action}:minute`, minuteWindow);
+
+    db.prepare(`
+      INSERT INTO rate_limits (client_ip, action, window_start, count)
+      VALUES (?, ?, ?, 1)
+      ON CONFLICT(client_ip, action, window_start)
+      DO UPDATE SET count = count + 1, updated_at = CURRENT_TIMESTAMP
+    `).run(params.clientIp, `${params.action}:day`, dayWindow);
+
+    return { allowed: true, remainingDaily: Math.max(0, perDay - 1 - (dayRow?.count ?? 0)) };
+  });
+
+  return apply();
 }
