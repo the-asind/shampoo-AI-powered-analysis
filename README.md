@@ -29,6 +29,7 @@ npm run dev
 ```
 
 Если `OPENAI_API_KEY` не задан, backend использует локальные эвристические правила и все равно сохраняет результат в SQLite.
+Если в окружении явно задан `HTTPS_PROXY` или `HTTP_PROXY`, AI-запросы к OpenAI-compatible endpoint отправляются через этот прокси. Остальные backend-запросы этим кодом не проксируются.
 В production без `RECAPTCHA_SECRET_KEY` защищённые API-методы отклоняют запросы. Для frontend нужен `VITE_RECAPTCHA_SITE_KEY`.
 Для `/api/analyze` и `/api/submissions` действует квота по IP отдельно на каждое действие: по умолчанию 1 запрос в минуту и 10 запросов в сутки. Настройки: `RATE_LIMIT_PER_MINUTE`, `RATE_LIMIT_PER_DAY`.
 

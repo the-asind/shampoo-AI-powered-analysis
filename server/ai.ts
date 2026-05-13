@@ -1,4 +1,5 @@
 import crypto from "node:crypto";
+import { ProxyAgent } from "undici";
 import { z } from "zod";
 import { heuristicAnalyzeIngredients } from "./scoring.js";
 import type { IngredientAnalysis, Shampoo } from "./types.js";
@@ -188,6 +189,21 @@ function buildOpenAiUrl() {
   return `${baseUrl}/chat/completions`;
 }
 
+function getProxyUrl() {
+  return process.env.HTTPS_PROXY || process.env.https_proxy || process.env.HTTP_PROXY || process.env.http_proxy || "";
+}
+
+function buildFetchOptions() {
+  const proxyUrl = getProxyUrl();
+  if (!proxyUrl) {
+    return {};
+  }
+
+  return {
+    dispatcher: new ProxyAgent(proxyUrl) as unknown,
+  } as RequestInit;
+}
+
 function extractJson(text: string) {
   const first = text.indexOf("{");
   const last = text.lastIndexOf("}");
@@ -235,6 +251,7 @@ export async function analyzeWithAi(
     const response = await fetch(buildOpenAiUrl(), {
       method: "POST",
       signal: controller.signal,
+      ...buildFetchOptions(),
       headers: {
         "content-type": "application/json",
         authorization: `Bearer ${apiKey}`,
