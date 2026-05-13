@@ -142,7 +142,21 @@ async function fetchJson<T>(url: string, init?: RequestInit): Promise<T> {
   return response.json() as Promise<T>;
 }
 
-function isHttpError(error: unknown): error is Error & { status: number; payload?: { retryAfterSeconds?: number; reason?: string } } {
+type HttpErrorPayload = {
+  error?: string;
+  retryAfterSeconds?: number;
+  reason?: string;
+  details?: {
+    reason?: string;
+    score?: number | null;
+    threshold?: number;
+    action?: string | null;
+    expectedAction?: string;
+    errors?: string[];
+  };
+};
+
+function isHttpError(error: unknown): error is Error & { status: number; payload?: HttpErrorPayload } {
   return error instanceof Error && typeof (error as { status?: unknown }).status === "number";
 }
 
@@ -161,6 +175,29 @@ function formatRateLimitNotice(error: unknown) {
   }
 
   return "Слишком часто. Для этого действия доступен один запрос в минуту.";
+}
+
+function formatRecaptchaNotice(error: unknown) {
+  if (!isHttpError(error) || error.status !== 403 || error.payload?.error !== "recaptcha_failed") {
+    return "";
+  }
+
+  const details = error.payload.details;
+  if (details?.reason === "recaptcha_low_score") {
+    const score = typeof details.score === "number" ? ` score ${details.score}` : "";
+    const threshold = typeof details.threshold === "number" ? ` при пороге ${details.threshold}` : "";
+    return `Проверка reCAPTCHA не пройдена${score}${threshold}. Обнови страницу и попробуй ещё раз.`;
+  }
+
+  if (details?.reason === "recaptcha_action_mismatch") {
+    return "Проверка reCAPTCHA вернула действие не для этой формы. Обнови страницу и попробуй ещё раз.";
+  }
+
+  if (details?.reason === "recaptcha_request_error" || details?.reason === "recaptcha_verify_failed") {
+    return "Не удалось проверить reCAPTCHA. Попробуй ещё раз позже.";
+  }
+
+  return "Проверка reCAPTCHA не пройдена. Обнови страницу и попробуй ещё раз.";
 }
 
 function loadRecaptchaScript(siteKey: string) {
@@ -372,8 +409,11 @@ export default function ShampooLanding() {
       }
     } catch (error) {
       const rateLimitNotice = formatRateLimitNotice(error);
+      const recaptchaNotice = formatRecaptchaNotice(error);
       if (rateLimitNotice) {
         setApiNotice(rateLimitNotice);
+      } else if (recaptchaNotice) {
+        setApiNotice(recaptchaNotice);
       } else {
         setServerAnalysis(localAnalyze(composition));
         setApiNotice("ИИ не ответил, показан предварительный локальный разбор.");
@@ -409,7 +449,11 @@ export default function ShampooLanding() {
       setApiNotice("");
     } catch (error) {
       setProposalSent(false);
-      setApiNotice(formatRateLimitNotice(error) || "Заявка не отправлена. Проверь ссылку, капча-проверку и доступность API.");
+      setApiNotice(
+        formatRateLimitNotice(error)
+          || formatRecaptchaNotice(error)
+          || "Заявка не отправлена. Проверь ссылку, капча-проверку и доступность API.",
+      );
     }
   }
 

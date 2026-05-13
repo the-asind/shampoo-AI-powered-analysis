@@ -33,6 +33,20 @@ npm run dev
 В production без `RECAPTCHA_SECRET_KEY` защищённые API-методы отклоняют запросы. Для frontend нужен `VITE_RECAPTCHA_SITE_KEY`.
 Для `/api/analyze` и `/api/submissions` действует квота по IP отдельно на каждое действие: по умолчанию 1 запрос в минуту и 10 запросов в сутки. Настройки: `RATE_LIMIT_PER_MINUTE`, `RATE_LIMIT_PER_DAY`.
 
+Если запрос не дошёл до ИИ, смотри логи контейнера:
+
+```bash
+docker logs shampoo-asind-dev --tail 100
+```
+
+Полезные события:
+
+- `recaptcha_failed` — запрос остановлен до ИИ; в поле `recaptcha.reason` будет причина, например `recaptcha_low_score`, `recaptcha_action_mismatch` или `recaptcha_request_error`.
+- `rate_limited` — сработала квота; в `rateLimit.reason` будет минутный или суточный лимит.
+- `AI analysis failed, using heuristic analysis` — reCAPTCHA и квота пройдены, но OpenAI-compatible endpoint не ответил; лог показывает `endpointHost`, `proxyEnabled`, `proxyHost`, `timeoutMs` и безопасный текст ошибки без ключей.
+
+Для reCAPTCHA v3 не стоит начинать с очень высокого порога. Разумный стартовый `RECAPTCHA_MIN_SCORE` — `0.5`, дальше порог лучше подбирать по реальным логам.
+
 ## Production
 
 ```bash

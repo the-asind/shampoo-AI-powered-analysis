@@ -6,6 +6,11 @@ import type { IngredientAnalysis, Shampoo } from "./types.js";
 
 export const PROMPT_VERSION = "shampoo-inci-evaluator-v2";
 
+type AiLogger = {
+  warn: (payload: Record<string, unknown>, message?: string) => void;
+  info?: (payload: Record<string, unknown>, message?: string) => void;
+};
+
 const AnalysisSchema = z.object({
   score: z.number().int().min(0).max(100),
   title: z.string().min(3).max(90),
@@ -190,7 +195,31 @@ function buildOpenAiUrl() {
 }
 
 function getProxyUrl() {
-  return process.env.HTTPS_PROXY || process.env.https_proxy || process.env.HTTP_PROXY || process.env.http_proxy || "";
+  return (process.env.HTTPS_PROXY || process.env.https_proxy || process.env.HTTP_PROXY || process.env.http_proxy || "").trim();
+}
+
+function publicUrlLabel(value: string) {
+  if (!value) {
+    return "";
+  }
+
+  try {
+    const url = new URL(value);
+    return `${url.protocol}//${url.host}`;
+  } catch {
+    return "invalid_url";
+  }
+}
+
+function errorPayload(error: unknown) {
+  if (error instanceof Error) {
+    return {
+      name: error.name,
+      message: error.message,
+    };
+  }
+
+  return { message: String(error) };
 }
 
 function buildFetchOptions() {
@@ -231,6 +260,7 @@ export function hashComposition(composition: string) {
 export async function analyzeWithAi(
   composition: string,
   leaders: Shampoo[],
+  logger?: AiLogger,
 ): Promise<{
   result: IngredientAnalysis;
   provider: "openai-compatible" | "heuristic";
@@ -238,8 +268,17 @@ export async function analyzeWithAi(
 }> {
   const apiKey = process.env.OPENAI_API_KEY;
   const model = process.env.OPENAI_MODEL ?? "gpt-4o-mini";
+  const aiUrl = buildOpenAiUrl();
+  const proxyUrl = getProxyUrl();
 
   if (!apiKey || !process.env.OPENAI_BASE_URL) {
+    logger?.warn(
+      {
+        provider: "heuristic",
+        reason: !apiKey ? "openai_api_key_missing" : "openai_base_url_missing",
+      },
+      "AI endpoint is not configured, using heuristic analysis",
+    );
     return { result: heuristicAnalyzeIngredients(composition), provider: "heuristic", model: "local-rules" };
   }
 
@@ -248,7 +287,7 @@ export async function analyzeWithAi(
   const timer = setTimeout(() => controller.abort(), timeout);
 
   try {
-    const response = await fetch(buildOpenAiUrl(), {
+    const response = await fetch(aiUrl, {
       method: "POST",
       signal: controller.signal,
       ...buildFetchOptions(),
@@ -268,7 +307,8 @@ export async function analyzeWithAi(
     });
 
     if (!response.ok) {
-      throw new Error(`AI endpoint returned ${response.status}`);
+      const body = await response.text().catch(() => "");
+      throw new Error(`AI endpoint returned ${response.status}${body ? `: ${body.slice(0, 500)}` : ""}`);
     }
 
     const payload = await response.json() as { choices?: Array<{ message?: { content?: string } }> };
@@ -282,7 +322,19 @@ export async function analyzeWithAi(
       provider: "openai-compatible",
       model,
     };
-  } catch {
+  } catch (error) {
+    logger?.warn(
+      {
+        provider: "heuristic",
+        model,
+        endpointHost: publicUrlLabel(aiUrl),
+        proxyEnabled: Boolean(proxyUrl),
+        proxyHost: publicUrlLabel(proxyUrl),
+        timeoutMs: timeout,
+        error: errorPayload(error),
+      },
+      "AI analysis failed, using heuristic analysis",
+    );
     return { result: heuristicAnalyzeIngredients(composition), provider: "heuristic", model: "local-rules" };
   } finally {
     clearTimeout(timer);

@@ -100,18 +100,21 @@ app.post("/api/analyze", async (request, reply) => {
     return reply.code(400).send({ error: "invalid_body", details: body.error.flatten() });
   }
 
-  const rateLimit = checkRateLimit({ clientIp: getClientIp(request), action: "analyze" });
-  const rateLimited = sendRateLimit(reply, rateLimit);
-  if (rateLimited) {
-    return rateLimited;
-  }
-
+  const clientIp = getClientIp(request);
   const recaptcha = await verifyRecaptcha(body.data.recaptchaToken, "analyze");
   if (!recaptcha.ok) {
+    request.log.warn({ action: "analyze", clientIp, recaptcha }, "recaptcha_failed");
     return reply.code(403).send({ error: "recaptcha_failed", details: recaptcha });
   }
 
-  const { result, provider, model } = await analyzeWithAi(body.data.composition, listTopShampoos(3));
+  const rateLimit = checkRateLimit({ clientIp, action: "analyze" });
+  const rateLimited = sendRateLimit(reply, rateLimit);
+  if (rateLimited) {
+    request.log.warn({ action: "analyze", clientIp, rateLimit }, "rate_limited");
+    return rateLimited;
+  }
+
+  const { result, provider, model } = await analyzeWithAi(body.data.composition, listTopShampoos(3), request.log);
   saveAnalysis({
     inputHash: hashComposition(body.data.composition),
     composition: body.data.composition,
@@ -121,6 +124,7 @@ app.post("/api/analyze", async (request, reply) => {
     promptVersion: PROMPT_VERSION,
   });
 
+  request.log.info({ action: "analyze", clientIp, provider, model, score: result.score }, "analysis_completed");
   return { result, provider, model, promptVersion: PROMPT_VERSION };
 });
 
@@ -130,18 +134,22 @@ app.post("/api/submissions", async (request, reply) => {
     return reply.code(400).send({ error: "invalid_body", details: body.error.flatten() });
   }
 
-  const rateLimit = checkRateLimit({ clientIp: getClientIp(request), action: "submit_shampoo" });
-  const rateLimited = sendRateLimit(reply, rateLimit);
-  if (rateLimited) {
-    return rateLimited;
-  }
-
+  const clientIp = getClientIp(request);
   const recaptcha = await verifyRecaptcha(body.data.recaptchaToken, "submit_shampoo");
   if (!recaptcha.ok) {
+    request.log.warn({ action: "submit_shampoo", clientIp, recaptcha }, "recaptcha_failed");
     return reply.code(403).send({ error: "recaptcha_failed", details: recaptcha });
   }
 
+  const rateLimit = checkRateLimit({ clientIp, action: "submit_shampoo" });
+  const rateLimited = sendRateLimit(reply, rateLimit);
+  if (rateLimited) {
+    request.log.warn({ action: "submit_shampoo", clientIp, rateLimit }, "rate_limited");
+    return rateLimited;
+  }
+
   const result = createSubmission(body.data);
+  request.log.info({ action: "submit_shampoo", clientIp, submissionId: result.id }, "submission_created");
   return reply.code(201).send(result);
 });
 
