@@ -6,7 +6,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { z } from "zod";
 import { analyzeWithAi, hashComposition, PROMPT_VERSION } from "./ai.js";
-import { checkRateLimit, createSubmission, getAdminSummary, listAnalyses, listComparisonShampoos, listShampoos, listSubmissions, recordVisit, saveAnalysis } from "./db.js";
+import { checkRateLimit, createSubmission, deleteAnalysis, deleteSubmission, getAdminSummary, listAnalyses, listComparisonShampoos, listShampoos, listSubmissions, recordVisit, saveAnalysis } from "./db.js";
 import { verifyRecaptcha } from "./recaptcha.js";
 
 dotenv.config();
@@ -85,6 +85,10 @@ const VisitBodySchema = z.object({
 const AdminListQuerySchema = z.object({
   limit: z.coerce.number().int().min(1).max(500).default(100),
   offset: z.coerce.number().int().min(0).default(0),
+});
+
+const AdminIdParamsSchema = z.object({
+  id: z.coerce.number().int().positive(),
 });
 
 const SubmissionBodySchema = z.object({
@@ -185,6 +189,36 @@ app.get("/api/admin/submissions", async (request, reply) => {
   return { items: listSubmissions(query.data.limit, query.data.offset) };
 });
 
+app.delete("/api/admin/analyses/:id", async (request, reply) => {
+  const unauthorized = requireAdmin(request, reply);
+  if (unauthorized) {
+    return unauthorized;
+  }
+
+  const params = AdminIdParamsSchema.safeParse(request.params);
+  if (!params.success) {
+    return reply.code(400).send({ error: "invalid_params" });
+  }
+
+  const changes = deleteAnalysis(params.data.id);
+  return reply.code(changes > 0 ? 204 : 404).send(changes > 0 ? undefined : { error: "not_found" });
+});
+
+app.delete("/api/admin/submissions/:id", async (request, reply) => {
+  const unauthorized = requireAdmin(request, reply);
+  if (unauthorized) {
+    return unauthorized;
+  }
+
+  const params = AdminIdParamsSchema.safeParse(request.params);
+  if (!params.success) {
+    return reply.code(400).send({ error: "invalid_params" });
+  }
+
+  const changes = deleteSubmission(params.data.id);
+  return reply.code(changes > 0 ? 204 : 404).send(changes > 0 ? undefined : { error: "not_found" });
+});
+
 app.post("/api/analyze", async (request, reply) => {
   const startedAt = Date.now();
   const body = AnalyzeBodySchema.safeParse(request.body);
@@ -214,13 +248,14 @@ app.post("/api/analyze", async (request, reply) => {
   const references = listComparisonShampoos();
   const referencesMs = Date.now() - referencesStartedAt;
   const aiStartedAt = Date.now();
-  const { result, provider, model } = await analyzeWithAi(body.data.composition, references, request.log);
+  const { result, provider, model, rawResponse } = await analyzeWithAi(body.data.composition, references, request.log);
   const aiMs = Date.now() - aiStartedAt;
   const saveStartedAt = Date.now();
   saveAnalysis({
     inputHash: hashComposition(body.data.composition),
     composition: body.data.composition,
     result,
+    rawResponse,
     provider,
     model,
     promptVersion: PROMPT_VERSION,

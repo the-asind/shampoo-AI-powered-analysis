@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from "react";
-import { ArrowRight, BarChart3, CheckCircle2, ChevronDown, CircleHelp, Copy, Lock, RefreshCw, Search } from "lucide-react";
+import { ArrowRight, BarChart3, CheckCircle2, ChevronDown, CircleHelp, Copy, Lock, RefreshCw, Search, Trash2 } from "lucide-react";
 import { mockShampoos } from "./server/mock-data";
 
 declare global {
@@ -59,6 +59,7 @@ type AdminAnalysis = {
   id: number;
   composition: string;
   result: Analysis | null;
+  rawResponse: unknown;
   provider: string;
   model: string;
   promptVersion: string;
@@ -189,6 +190,14 @@ function shortText(value: string, max = 220) {
   return value.length > max ? `${value.slice(0, max).trim()}...` : value;
 }
 
+function formatRawJson(value: unknown) {
+  if (value === null || value === undefined || value === "") {
+    return "Сырой ответ не сохранён для этой записи.";
+  }
+
+  return typeof value === "string" ? value : JSON.stringify(value, null, 2);
+}
+
 async function fetchJson<T>(url: string, init?: RequestInit): Promise<T> {
   const response = await fetch(url, {
     ...init,
@@ -209,6 +218,10 @@ async function fetchJson<T>(url: string, init?: RequestInit): Promise<T> {
     const error = new Error(`Request failed: ${response.status}`);
     Object.assign(error, { status: response.status, payload });
     throw error;
+  }
+
+  if (response.status === 204) {
+    return undefined as T;
   }
 
   return response.json() as Promise<T>;
@@ -450,6 +463,7 @@ function AdminDashboard() {
   const [summary, setSummary] = useState<AdminSummary | null>(null);
   const [analyses, setAnalyses] = useState<AdminAnalysis[]>([]);
   const [submissions, setSubmissions] = useState<AdminSubmission[]>([]);
+  const [expandedAnalysisId, setExpandedAnalysisId] = useState<number | null>(null);
   const [notice, setNotice] = useState("");
   const [loading, setLoading] = useState(false);
 
@@ -485,6 +499,29 @@ function AdminDashboard() {
       void loadAdminData(token);
     }
   }, []);
+
+  async function deleteAdminItem(kind: "analyses" | "submissions", id: number) {
+    if (!token.trim()) {
+      setNotice("Нужен ADMIN_TOKEN.");
+      return;
+    }
+
+    try {
+      await fetchJson(`/api/admin/${kind}/${id}`, {
+        method: "DELETE",
+        headers: { authorization: `Bearer ${token}` },
+      });
+      if (kind === "analyses") {
+        setAnalyses((items) => items.filter((item) => item.id !== id));
+        setExpandedAnalysisId((current) => (current === id ? null : current));
+      } else {
+        setSubmissions((items) => items.filter((item) => item.id !== id));
+      }
+      void loadAdminData(token);
+    } catch {
+      setNotice("Не удалось удалить запись. Проверь токен и доступность API.");
+    }
+  }
 
   const scoreRows = summary?.scoreBuckets.map((row) => ({ bucket: `${row.bucket}-${row.bucket + 9}`, count: row.count })) ?? [];
 
@@ -554,12 +591,31 @@ function AdminDashboard() {
               {analyses.map((item) => (
                 <article key={item.id} className="rounded-md border border-zinc-100 bg-zinc-50 p-4">
                   <div className="flex flex-wrap items-center justify-between gap-3">
-                    <div className="text-sm font-medium">{item.result?.title ?? "Без результата"}</div>
-                    <div className="text-sm font-semibold tabular-nums">{item.result?.score ?? "—"}</div>
+                    <button onClick={() => setExpandedAnalysisId(expandedAnalysisId === item.id ? null : item.id)} className="text-left text-sm font-medium hover:underline">
+                      {item.result?.title ?? "Без результата"}
+                    </button>
+                    <div className="flex items-center gap-3">
+                      <div className="text-sm font-semibold tabular-nums">{item.result?.score ?? "—"}</div>
+                      <button
+                        onClick={() => void deleteAdminItem("analyses", item.id)}
+                        className="inline-flex h-8 w-8 items-center justify-center rounded-full bg-white text-zinc-400 ring-1 ring-zinc-200 hover:text-red-600"
+                        title="Удалить анализ"
+                      >
+                        <Trash2 className="h-4 w-4" />
+                      </button>
+                    </div>
                   </div>
                   <div className="mt-1 text-xs text-zinc-400">{formatDateTime(item.createdAt)} · {item.provider} · {item.model}</div>
                   <p className="mt-3 text-sm leading-6 text-zinc-600">{shortText(item.composition)}</p>
                   {item.result?.verdict && <p className="mt-2 text-sm leading-6 text-zinc-800">{shortText(item.result.verdict, 260)}</p>}
+                  {expandedAnalysisId === item.id && (
+                    <div className="mt-3 rounded-md border border-zinc-200 bg-white p-3">
+                      <div className="mb-2 text-xs font-medium uppercase tracking-[0.14em] text-zinc-400">сырой ответ модели</div>
+                      <pre className="max-h-[360px] overflow-auto whitespace-pre-wrap break-words text-xs leading-5 text-zinc-600">
+                        {formatRawJson(item.rawResponse)}
+                      </pre>
+                    </div>
+                  )}
                 </article>
               ))}
               {analyses.length === 0 && <p className="text-sm text-zinc-500">Пока пусто.</p>}
@@ -573,7 +629,16 @@ function AdminDashboard() {
                 <article key={item.id} className="rounded-md border border-zinc-100 bg-zinc-50 p-4">
                   <div className="flex flex-wrap items-center justify-between gap-3">
                     <a href={item.sourceUrl} target="_blank" rel="noreferrer" className="text-sm font-medium text-zinc-950 hover:underline">{item.name}</a>
-                    <span className="rounded-full bg-white px-2.5 py-1 text-xs text-zinc-500 ring-1 ring-zinc-200">{item.status}</span>
+                    <div className="flex items-center gap-2">
+                      <span className="rounded-full bg-white px-2.5 py-1 text-xs text-zinc-500 ring-1 ring-zinc-200">{item.status}</span>
+                      <button
+                        onClick={() => void deleteAdminItem("submissions", item.id)}
+                        className="inline-flex h-8 w-8 items-center justify-center rounded-full bg-white text-zinc-400 ring-1 ring-zinc-200 hover:text-red-600"
+                        title="Удалить предложение"
+                      >
+                        <Trash2 className="h-4 w-4" />
+                      </button>
+                    </div>
                   </div>
                   <div className="mt-1 text-xs text-zinc-400">{formatDateTime(item.createdAt)} · score {item.analysis?.score ?? "—"}</div>
                   <p className="mt-3 text-sm leading-6 text-zinc-600">{shortText(item.composition)}</p>

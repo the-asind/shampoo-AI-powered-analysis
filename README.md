@@ -20,6 +20,7 @@ SQLite выбран намеренно: для одной слабой VPS и к
 - `POST /api/submissions` `{ "name": "...", "sourceUrl": "...", "composition": "...", "analysis": {...}, "recaptchaToken": "..." }`
 - `POST /api/visits` `{ "path": "/" }`
 - `GET /api/admin/summary`, `GET /api/admin/analyses`, `GET /api/admin/submissions` with `Authorization: Bearer $ADMIN_TOKEN`
+- `DELETE /api/admin/analyses/:id`, `DELETE /api/admin/submissions/:id` with `Authorization: Bearer $ADMIN_TOKEN`
 
 ## Локальный запуск
 

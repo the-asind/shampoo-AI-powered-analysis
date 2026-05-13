@@ -45,6 +45,7 @@ db.exec(`
     input_hash TEXT NOT NULL,
     composition TEXT NOT NULL,
     result_json TEXT NOT NULL,
+    raw_response_json TEXT NOT NULL DEFAULT '',
     provider TEXT NOT NULL,
     model TEXT NOT NULL,
     prompt_version TEXT NOT NULL,
@@ -100,6 +101,11 @@ db.exec(`
 const shampooColumns = db.prepare("PRAGMA table_info(shampoos)").all() as Array<{ name: string }>;
 if (!shampooColumns.some((column) => column.name === "inci")) {
   db.prepare("ALTER TABLE shampoos ADD COLUMN inci TEXT NOT NULL DEFAULT ''").run();
+}
+
+const analysisColumns = db.prepare("PRAGMA table_info(analyses)").all() as Array<{ name: string }>;
+if (!analysisColumns.some((column) => column.name === "raw_response_json")) {
+  db.prepare("ALTER TABLE analyses ADD COLUMN raw_response_json TEXT NOT NULL DEFAULT ''").run();
 }
 
 const replaceShampoos = db.transaction((items: Shampoo[]) => {
@@ -215,17 +221,19 @@ export function saveAnalysis(params: {
   inputHash: string;
   composition: string;
   result: IngredientAnalysis;
+  rawResponse: unknown;
   provider: string;
   model: string;
   promptVersion: string;
 }) {
   db.prepare(`
-    INSERT INTO analyses (input_hash, composition, result_json, provider, model, prompt_version)
-    VALUES (@inputHash, @composition, @resultJson, @provider, @model, @promptVersion)
+    INSERT INTO analyses (input_hash, composition, result_json, raw_response_json, provider, model, prompt_version)
+    VALUES (@inputHash, @composition, @resultJson, @rawResponseJson, @provider, @model, @promptVersion)
   `).run({
     inputHash: params.inputHash,
     composition: params.composition,
     resultJson: JSON.stringify(params.result),
+    rawResponseJson: params.rawResponse ? JSON.stringify(params.rawResponse) : "",
     provider: params.provider,
     model: params.model,
     promptVersion: params.promptVersion,
@@ -240,12 +248,25 @@ function parseAnalysis(value: string): IngredientAnalysis | null {
   }
 }
 
+function parseUnknownJson(value: string): unknown {
+  if (!value) {
+    return null;
+  }
+
+  try {
+    return JSON.parse(value);
+  } catch {
+    return value;
+  }
+}
+
 function mapAnalysisRow(row: Record<string, unknown>) {
   return {
     id: Number(row.id),
     inputHash: String(row.input_hash),
     composition: String(row.composition),
     result: parseAnalysis(String(row.result_json)),
+    rawResponse: parseUnknownJson(String(row.raw_response_json ?? "")),
     provider: String(row.provider),
     model: String(row.model),
     promptVersion: String(row.prompt_version),
@@ -385,6 +406,14 @@ export function listSubmissions(limit = 100, offset = 0) {
     .prepare("SELECT * FROM submissions ORDER BY created_at DESC, id DESC LIMIT ? OFFSET ?")
     .all(Math.max(1, Math.min(500, limit)), Math.max(0, offset)) as Record<string, unknown>[];
   return rows.map(mapSubmissionRow);
+}
+
+export function deleteAnalysis(id: number) {
+  return db.prepare("DELETE FROM analyses WHERE id = ?").run(id).changes;
+}
+
+export function deleteSubmission(id: number) {
+  return db.prepare("DELETE FROM submissions WHERE id = ?").run(id).changes;
 }
 
 export function createSubmission(params: {

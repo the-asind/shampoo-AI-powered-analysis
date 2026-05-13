@@ -439,7 +439,10 @@ async function callOpenAiProvider(params: {
     throw new Error("OpenAI-compatible response is empty");
   }
 
-  return extractJson(content);
+  return {
+    analysis: extractJson(content),
+    rawResponse: payload,
+  };
 }
 
 async function callAnthropicProvider(params: {
@@ -482,12 +485,18 @@ async function callAnthropicProvider(params: {
   const payload = await response.json() as { content?: Array<{ type?: string; name?: string; input?: unknown; text?: string }> };
   const toolUse = payload.content?.find((item) => item.type === "tool_use" && item.name === "return_shampoo_analysis");
   if (toolUse?.input) {
-    return toolUse.input;
+    return {
+      analysis: toolUse.input,
+      rawResponse: payload,
+    };
   }
 
   const text = payload.content?.find((item) => item.type === "text" && item.text)?.text;
   if (text) {
-    return extractJson(text);
+    return {
+      analysis: extractJson(text),
+      rawResponse: payload,
+    };
   }
 
   throw new Error("Anthropic response does not contain tool_use input");
@@ -518,6 +527,7 @@ export async function analyzeWithAi(
   result: IngredientAnalysis;
   provider: string;
   model: string;
+  rawResponse: unknown;
 }> {
   const proxyUrl = getProxyUrl();
   const providers = getProviderChain(logger);
@@ -525,7 +535,7 @@ export async function analyzeWithAi(
   const timeout = Number(process.env.AI_TIMEOUT_MS ?? process.env.OPENAI_TIMEOUT_MS ?? 12000);
 
   if (providers.length === 0) {
-    return { result: heuristicAnalyzeIngredients(composition), provider: "heuristic", model: "local-rules" };
+    return { result: heuristicAnalyzeIngredients(composition), provider: "heuristic", model: "local-rules", rawResponse: null };
   }
 
   for (const config of providers) {
@@ -540,7 +550,7 @@ export async function analyzeWithAi(
         systemPrompt,
         signal: controller.signal,
       });
-      const parsed = clampAnalysis(AnalysisSchema.parse(rawResult));
+      const parsed = clampAnalysis(AnalysisSchema.parse(rawResult.analysis));
       logger?.info?.(
         {
           provider: config.provider,
@@ -560,6 +570,7 @@ export async function analyzeWithAi(
         result: parsed,
         provider: config.provider,
         model: config.model,
+        rawResponse: rawResult.rawResponse,
       };
     } catch (error) {
       logger?.warn(
@@ -582,5 +593,5 @@ export async function analyzeWithAi(
   }
 
   logger?.warn({ provider: "heuristic" }, "All AI providers failed, using heuristic analysis");
-  return { result: heuristicAnalyzeIngredients(composition), provider: "heuristic", model: "local-rules" };
+  return { result: heuristicAnalyzeIngredients(composition), provider: "heuristic", model: "local-rules", rawResponse: null };
 }
