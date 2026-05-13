@@ -1,5 +1,5 @@
 import crypto from "node:crypto";
-import { ProxyAgent } from "undici";
+import { ProxyAgent, fetch as undiciFetch } from "undici";
 import { z } from "zod";
 import { heuristicAnalyzeIngredients } from "./scoring.js";
 import type { IngredientAnalysis, Shampoo } from "./types.js";
@@ -10,6 +10,7 @@ type AiLogger = {
   warn: (payload: Record<string, unknown>, message?: string) => void;
   info?: (payload: Record<string, unknown>, message?: string) => void;
 };
+type AiFetchOptions = NonNullable<Parameters<typeof undiciFetch>[1]>;
 
 const AnalysisSchema = z.object({
   score: z.number().int().min(0).max(100),
@@ -205,32 +206,47 @@ function publicUrlLabel(value: string) {
 
   try {
     const url = new URL(value);
-    return `${url.protocol}//${url.host}`;
+    return `${url.protocol}//${url.host}${url.pathname}`;
   } catch {
     return "invalid_url";
   }
 }
 
-function errorPayload(error: unknown) {
+function errorPayload(error: unknown, depth = 0): Record<string, unknown> {
   if (error instanceof Error) {
+    const cause = (error as Error & { cause?: unknown }).cause;
     return {
       name: error.name,
       message: error.message,
+      cause: cause && depth < 3 ? errorPayload(cause, depth + 1) : undefined,
+    };
+  }
+
+  if (typeof error === "object" && error !== null) {
+    const payload = error as Record<string, unknown>;
+    return {
+      name: payload.name,
+      message: payload.message ? String(payload.message) : String(error),
+      code: payload.code,
+      errno: payload.errno,
+      syscall: payload.syscall,
+      address: payload.address,
+      port: payload.port,
     };
   }
 
   return { message: String(error) };
 }
 
-function buildFetchOptions() {
+function buildFetchOptions(): Partial<AiFetchOptions> {
   const proxyUrl = getProxyUrl();
   if (!proxyUrl) {
     return {};
   }
 
   return {
-    dispatcher: new ProxyAgent(proxyUrl) as unknown,
-  } as RequestInit;
+    dispatcher: new ProxyAgent(proxyUrl),
+  };
 }
 
 function extractJson(text: string) {
@@ -287,7 +303,7 @@ export async function analyzeWithAi(
   const timer = setTimeout(() => controller.abort(), timeout);
 
   try {
-    const response = await fetch(aiUrl, {
+    const response = await undiciFetch(aiUrl, {
       method: "POST",
       signal: controller.signal,
       ...buildFetchOptions(),
