@@ -133,6 +133,30 @@ const examples: Array<{ composition: string; analysis: Analysis }> = [
 const authorUrl = import.meta.env.VITE_AUTHOR_URL || "#";
 const recaptchaSiteKey = import.meta.env.VITE_RECAPTCHA_SITE_KEY || "";
 
+const analysisWaitMessages = [
+  "Проверяю состав и собираю первичную картину.",
+  "Разбираю моющую базу: насколько она мягкая и сбалансированная.",
+  "Смотрю, есть ли компоненты для скольжения и более приятного ощущения волос.",
+  "Проверяю потенциальные раздражители и спорные консерванты.",
+  "Отделяю полезные части формулы от маркетингового хвоста.",
+  "Сравниваю состав с лидерами рейтинга для разных типов кожи головы.",
+  "Проверяю, не завышает ли формула ожидания за счёт красивых обещаний.",
+  "Оцениваю, насколько состав похож на честный повседневный вариант.",
+  "Сверяю сильные стороны состава с его заметными оговорками.",
+  "Смотрю, для какой кожи головы такой шампунь выглядит наиболее уместным.",
+  "Формирую короткий вывод без лишних химических подробностей.",
+  "Проверяю оценку на адекватность относительно шампуней около 70, 60 и 50 баллов.",
+  "Уточняю сравнение с текущими референсами, чтобы вывод был не абстрактным.",
+  "Сокращаю разбор до человеческого языка: что хорошо, что стоит учесть.",
+  "Проверяю, нет ли в ответе слишком резких обещаний или медицинских утверждений.",
+  "Собираю итоговую оценку и уровень уверенности.",
+  "Финально выравниваю плюсы, минусы и сравнение с рейтингом.",
+  "Ответ почти готов: проверяю, чтобы он был понятным обычному покупателю.",
+  "Запрос занял дольше обычного, но анализ всё ещё выполняется.",
+  "Жду финальный ответ провайдера и держу результат в одном запросе.",
+  "Если основной ответ не успеет, система попробует получить аккуратный результат другим путём.",
+];
+
 function formatPrice(price: number) {
   return price > 0 ? `${price} ₽/л` : "нет данных";
 }
@@ -593,6 +617,7 @@ function PublicLanding() {
   const [proposalSent, setProposalSent] = useState(false);
   const [copiedId, setCopiedId] = useState<number | null>(null);
   const [ratingNoteOpen, setRatingNoteOpen] = useState(false);
+  const [analysisElapsedSeconds, setAnalysisElapsedSeconds] = useState(0);
 
   useEffect(() => {
     let ignore = false;
@@ -620,6 +645,20 @@ function PublicLanding() {
   }, []);
 
   useEffect(() => {
+    if (!isAnalyzing) {
+      setAnalysisElapsedSeconds(0);
+      return undefined;
+    }
+
+    const startedAt = Date.now();
+    const interval = window.setInterval(() => {
+      setAnalysisElapsedSeconds(Math.min(200, Math.floor((Date.now() - startedAt) / 1000)));
+    }, 1000);
+
+    return () => window.clearInterval(interval);
+  }, [isAnalyzing]);
+
+  useEffect(() => {
     const key = "shampooVisitTracked";
     if (sessionStorage.getItem(key)) {
       return;
@@ -638,6 +677,7 @@ function PublicLanding() {
   );
   const currentTab = tabs.find((tab) => tab.id === activeTab);
   const analysis = serverAnalysis;
+  const waitMessage = analysisWaitMessages[Math.min(analysisWaitMessages.length - 1, Math.floor(analysisElapsedSeconds / 10))];
 
   async function requestAiAnalysis() {
     setApiNotice("");
@@ -903,6 +943,7 @@ function PublicLanding() {
                 <ArrowRight className="h-4 w-4" />
               </button>
             </div>
+            <p className="mt-2 text-xs leading-5 text-zinc-400">защита от спама reCAPTCHA</p>
 
             {(analysis || isAnalyzing) && composition.trim().length >= 20 && (
               <div className="mt-5 rounded-lg border border-zinc-200 bg-white p-5">
@@ -910,9 +951,16 @@ function PublicLanding() {
                   <div>
                     <div className="text-sm font-medium text-zinc-500">Разбор состава</div>
                     <h3 className="mt-1 text-2xl font-semibold tracking-tight text-zinc-950">{analysis?.title ?? "Проверяю состав"}</h3>
-                    <p className="mt-2 max-w-[680px] text-sm leading-6 text-zinc-600">
-                      {analysis?.verdict ?? "Жду ответ ИИ. Локальная эвристика появится только если запрос не пройдёт."}
-                    </p>
+                    {analysis?.verdict ? (
+                      <p className="mt-2 max-w-[680px] text-sm leading-6 text-zinc-600">{analysis.verdict}</p>
+                    ) : (
+                      <div className="mt-2 max-w-[680px] space-y-2">
+                        <p className="text-sm leading-6 text-zinc-600">{waitMessage}</p>
+                        <p className="text-xs leading-5 text-zinc-400">
+                          Проверка может затянуться до трёх минут: состав сравнивается с рейтингом и несколькими референсами.
+                        </p>
+                      </div>
+                    )}
                   </div>
                   {analysis && analysis.tone !== "empty" && <ScoreRing score={analysis.score} />}
                 </div>

@@ -14,3 +14,7 @@ input,
 textarea {
   font: inherit;
 }
+
+.grecaptcha-badge {
+  visibility: hidden;
+}
