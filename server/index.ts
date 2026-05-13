@@ -6,7 +6,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { z } from "zod";
 import { analyzeWithAi, hashComposition, PROMPT_VERSION } from "./ai.js";
-import { checkRateLimit, createSubmission, deleteAnalysis, deleteSubmission, getAdminSummary, listAnalyses, listComparisonShampoos, listShampoos, listSubmissions, recordVisit, saveAnalysis } from "./db.js";
+import { checkRateLimit, createSubmission, deleteAnalysis, deleteSubmission, findLatestAnalysisByComposition, getAdminSummary, listAnalyses, listComparisonShampoos, listShampoos, listSubmissions, recordVisit, saveAnalysis } from "./db.js";
 import { verifyRecaptcha } from "./recaptcha.js";
 
 dotenv.config();
@@ -235,6 +235,32 @@ app.post("/api/analyze", async (request, reply) => {
     return reply.code(403).send({ error: "recaptcha_failed", details: recaptcha });
   }
 
+  const normalizedComposition = body.data.composition.trim();
+  const inputHash = hashComposition(normalizedComposition);
+  const cachedAnalysis = findLatestAnalysisByComposition({
+    inputHash,
+    composition: normalizedComposition,
+  });
+  if (cachedAnalysis?.result) {
+    request.log.info({
+      action: "analyze",
+      clientIp,
+      provider: "cache",
+      originalProvider: cachedAnalysis.provider,
+      model: cachedAnalysis.model,
+      score: cachedAnalysis.result.score,
+      recaptchaMs,
+      totalMs: Date.now() - startedAt,
+    }, "analysis_cache_hit");
+    return {
+      result: cachedAnalysis.result,
+      provider: "cache",
+      model: cachedAnalysis.model,
+      promptVersion: cachedAnalysis.promptVersion,
+      cachedAt: cachedAnalysis.createdAt,
+    };
+  }
+
   const rateLimitStartedAt = Date.now();
   const rateLimit = checkRateLimit({ clientIp, action: "analyze" });
   const rateLimitMs = Date.now() - rateLimitStartedAt;
@@ -248,12 +274,12 @@ app.post("/api/analyze", async (request, reply) => {
   const references = listComparisonShampoos();
   const referencesMs = Date.now() - referencesStartedAt;
   const aiStartedAt = Date.now();
-  const { result, provider, model, rawResponse } = await analyzeWithAi(body.data.composition, references, request.log);
+  const { result, provider, model, rawResponse } = await analyzeWithAi(normalizedComposition, references, request.log);
   const aiMs = Date.now() - aiStartedAt;
   const saveStartedAt = Date.now();
   saveAnalysis({
-    inputHash: hashComposition(body.data.composition),
-    composition: body.data.composition,
+    inputHash,
+    composition: normalizedComposition,
     result,
     rawResponse,
     provider,

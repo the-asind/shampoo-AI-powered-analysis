@@ -198,6 +198,16 @@ function formatRawJson(value: unknown) {
   return typeof value === "string" ? value : JSON.stringify(value, null, 2);
 }
 
+function getAnalysisProgress(elapsedSeconds: number) {
+  const seconds = Math.max(0, Math.min(200, elapsedSeconds));
+  if (seconds <= 60) {
+    return Math.round(8 + (seconds / 60) * 62);
+  }
+
+  const slowPart = 1 - Math.exp(-(seconds - 60) / 55);
+  return Math.min(98, Math.round(70 + slowPart * 28));
+}
+
 async function fetchJson<T>(url: string, init?: RequestInit): Promise<T> {
   const response = await fetch(url, {
     ...init,
@@ -368,8 +378,8 @@ function localAnalyze(composition: string): Analysis {
       confidence: "средняя",
       shampooType: "универсальный",
       pros: good.join(" ") || "Состав выглядит достаточно сбалансированным.",
-      cons: risk.join(" ") || "Явных серьезных минусов по локальной проверке не видно, но pH, запах и личную переносимость по составу узнать нельзя.",
-      leaderComparison: "По локальным правилам состав выглядит достаточно сильным, чтобы сравнивать его с текущими лидерами.",
+      cons: risk.join(" ") || "Явных серьезных минусов по быстрой программной проверке не видно, но pH, запах и личную переносимость по составу узнать нельзя.",
+      leaderComparison: "По быстрой программной проверке состав выглядит достаточно сильным, чтобы сравнивать его с текущими лидерами.",
       shouldSuggest: true,
     };
   }
@@ -381,7 +391,7 @@ function localAnalyze(composition: string): Analysis {
     tone: score >= 58 ? "watch" : "weak",
     confidence: "средняя",
     shampooType: "универсальный",
-    pros: good.join(" ") || "Сильных плюсов по локальной проверке не видно.",
+    pros: good.join(" ") || "Сильных плюсов по быстрой программной проверке не видно.",
     cons: risk.join(" ") || "Состав не выглядит однозначным, лучше сравнить его с лидерами рейтинга.",
     leaderComparison: "Пока это скорее кандидат для ручного сравнения, чем очевидный лидер.",
     shouldSuggest: false,
@@ -675,6 +685,7 @@ function PublicLanding() {
   const [expandedId, setExpandedId] = useState<number | null>(null);
   const [composition, setComposition] = useState("");
   const [serverAnalysis, setServerAnalysis] = useState<Analysis | null>(null);
+  const [analysisProvider, setAnalysisProvider] = useState("");
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [apiNotice, setApiNotice] = useState("");
   const [productName, setProductName] = useState("");
@@ -696,7 +707,7 @@ function PublicLanding() {
       })
       .catch(() => {
         if (!ignore) {
-          setApiNotice("Показан локальный мок: API рейтинга не ответил.");
+          setApiNotice("API рейтинга не ответил. Пока показаны встроенные данные.");
         }
       });
 
@@ -743,10 +754,13 @@ function PublicLanding() {
   const currentTab = tabs.find((tab) => tab.id === activeTab);
   const analysis = serverAnalysis;
   const waitMessage = analysisWaitMessages[Math.min(analysisWaitMessages.length - 1, Math.floor(analysisElapsedSeconds / 10))];
+  const analysisProgress = getAnalysisProgress(analysisElapsedSeconds);
+  const isProgrammaticAnalysis = analysisProvider === "heuristic" || analysisProvider === "program";
 
   async function requestAiAnalysis() {
     setApiNotice("");
     setServerAnalysis(null);
+    setAnalysisProvider("");
     setProposalSent(false);
     setIsAnalyzing(true);
 
@@ -757,8 +771,9 @@ function PublicLanding() {
         body: JSON.stringify({ composition, recaptchaToken }),
       });
       setServerAnalysis(data.result);
+      setAnalysisProvider(data.provider);
       if (data.provider === "heuristic") {
-        setApiNotice("ИИ-эндпоинт не настроен, использованы локальные правила.");
+        setApiNotice("Внимание: ИИ сейчас не ответил. Показана запасная программная оценка, она менее надёжна, чем полноценный разбор модели.");
       }
     } catch (error) {
       const rateLimitNotice = formatRateLimitNotice(error);
@@ -769,7 +784,8 @@ function PublicLanding() {
         setApiNotice(recaptchaNotice);
       } else {
         setServerAnalysis(localAnalyze(composition));
-        setApiNotice("ИИ не ответил, показан предварительный локальный разбор.");
+        setAnalysisProvider("program");
+        setApiNotice("Внимание: ИИ сейчас не ответил. Показана запасная программная оценка, она менее надёжна, чем полноценный разбор модели.");
       }
     } finally {
       setIsAnalyzing(false);
@@ -813,6 +829,7 @@ function PublicLanding() {
   function setExample(value: string, analysis: Analysis | null = null) {
     setComposition(value);
     setServerAnalysis(analysis);
+    setAnalysisProvider("");
     setProposalSent(false);
   }
 
@@ -1015,11 +1032,26 @@ function PublicLanding() {
                 <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
                   <div>
                     <div className="text-sm font-medium text-zinc-500">Разбор состава</div>
+                    {isProgrammaticAnalysis && (
+                      <div className="mb-3 mt-2 rounded-lg border border-amber-300 bg-amber-50 p-3 text-sm font-medium leading-6 text-amber-950">
+                        ИИ-разбор сейчас недоступен. Ниже показана запасная программная оценка: она помогает не оставить форму пустой, но ей нельзя доверять так же, как полноценному ответу модели.
+                      </div>
+                    )}
                     <h3 className="mt-1 text-2xl font-semibold tracking-tight text-zinc-950">{analysis?.title ?? "Проверяю состав"}</h3>
                     {analysis?.verdict ? (
                       <p className="mt-2 max-w-[680px] text-sm leading-6 text-zinc-600">{analysis.verdict}</p>
                     ) : (
                       <div className="mt-2 max-w-[680px] space-y-2">
+                        <div className="h-2 overflow-hidden rounded-full bg-zinc-100">
+                          <div
+                            className="h-full rounded-full bg-zinc-950 transition-[width] duration-1000 ease-out"
+                            style={{ width: `${analysisProgress}%` }}
+                          />
+                        </div>
+                        <div className="flex justify-between text-xs text-zinc-400">
+                          <span>идёт проверка</span>
+                          <span>{analysisProgress}%</span>
+                        </div>
                         <p className="text-sm leading-6 text-zinc-600">{waitMessage}</p>
                         <p className="text-xs leading-5 text-zinc-400">
                           Проверка может затянуться до трёх минут: состав сравнивается с рейтингом и несколькими референсами.
@@ -1086,7 +1118,11 @@ function PublicLanding() {
               </div>
             )}
 
-            {apiNotice && <div className="mt-4 text-sm leading-6 text-amber-700">{apiNotice}</div>}
+            {apiNotice && (
+              <div className="mt-4 rounded-lg border border-amber-200 bg-amber-50 p-4 text-sm font-medium leading-6 text-amber-900">
+                {apiNotice}
+              </div>
+            )}
           </div>
         </div>
       </section>

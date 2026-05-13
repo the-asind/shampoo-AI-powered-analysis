@@ -274,6 +274,23 @@ function mapAnalysisRow(row: Record<string, unknown>) {
   };
 }
 
+export function findLatestAnalysisByComposition(params: {
+  inputHash: string;
+  composition: string;
+}) {
+  const row = db
+    .prepare(`
+      SELECT *
+      FROM analyses
+      WHERE composition = ? OR (input_hash = ? AND composition = ?)
+      ORDER BY created_at DESC, id DESC
+      LIMIT 1
+    `)
+    .get(params.composition, params.inputHash, params.composition) as Record<string, unknown> | undefined;
+
+  return row ? mapAnalysisRow(row) : null;
+}
+
 function mapSubmissionRow(row: Record<string, unknown>) {
   return {
     id: Number(row.id),

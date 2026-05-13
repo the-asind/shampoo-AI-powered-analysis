@@ -177,7 +177,7 @@ export function heuristicAnalyzeIngredients(input: string): IngredientAnalysis {
       shampooType: "универсальный",
       pros: foundGood.join(" "),
       cons: foundRisk.length > 0 ? foundRisk.join(" ") : "Явных серьезных минусов по словарю не видно.",
-      leaderComparison: "По локальным правилам состав выглядит достаточно сильным, чтобы сравнивать его с текущими лидерами.",
+      leaderComparison: "По быстрой программной проверке состав выглядит достаточно сильным, чтобы сравнивать его с текущими лидерами.",
       shouldSuggest: true,
     };
   }
@@ -190,7 +190,7 @@ export function heuristicAnalyzeIngredients(input: string): IngredientAnalysis {
       tone: "watch",
       confidence: "средняя",
       shampooType: foundRisk.length > 1 ? "маркетингово перегруженный" : "универсальный",
-      pros: foundGood.length > 0 ? foundGood.join(" ") : "Есть рабочие компоненты, но сильных преимуществ по локальным правилам мало.",
+      pros: foundGood.length > 0 ? foundGood.join(" ") : "Есть рабочие компоненты, но сильных преимуществ по быстрой программной проверке мало.",
       cons: [...foundRisk, ...foundNeutral, ...missing.map((item) => `Не видно: ${item}.`)].join(" "),
       leaderComparison: "Пока это скорее кандидат для сравнения, чем очевидный лидер.",
       shouldSuggest: foundGood.length >= 3 && foundRisk.length <= 2,
@@ -204,7 +204,7 @@ export function heuristicAnalyzeIngredients(input: string): IngredientAnalysis {
     tone: "weak",
     confidence: "средняя",
     shampooType: "не рекомендуется",
-    pros: foundGood.length > 0 ? foundGood.join(" ") : "Сильных плюсов по локальным правилам не видно.",
+    pros: foundGood.length > 0 ? foundGood.join(" ") : "Сильных плюсов по быстрой программной проверке не видно.",
     cons: foundRisk.length > 0 ? foundRisk.join(" ") : "Состав выглядит неполным или малоинформативным.",
     leaderComparison: "До текущих лидеров рейтинга по понятности и балансу состава не дотягивает.",
     shouldSuggest: false,

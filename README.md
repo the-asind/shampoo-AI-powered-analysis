@@ -33,6 +33,7 @@ npm run dev
 
 AI-цепочка настраивается через `AI_PROVIDER=openai|anthropic` и `AI_FALLBACK_PROVIDER=openai|anthropic|none`. Для OpenAI-compatible endpoint нужны `OPENAI_BASE_URL`, `OPENAI_API_KEY`, `OPENAI_MODEL`. Для Anthropic нужны `ANTHROPIC_BASE_URL`, `ANTHROPIC_API_KEY`, `ANTHROPIC_MODEL`; структурный ответ запрашивается через tool use с JSON Schema. Если оба AI-провайдера недоступны или не настроены, backend использует локальные эвристические правила и все равно сохраняет результат в SQLite.
 Если в окружении явно задан `HTTPS_PROXY` или `HTTP_PROXY`, AI-запросы к обоим провайдерам отправляются через этот прокси. Остальные backend-запросы этим кодом не проксируются.
+После успешной reCAPTCHA backend сначала ищет уже сохранённый разбор с точно таким же составом после `trim()`. Если находит, возвращает cached-ответ без нового AI-запроса и без списания пользовательской квоты.
 В production без `RECAPTCHA_SECRET_KEY` защищённые API-методы отклоняют запросы. Для frontend нужен `VITE_RECAPTCHA_SITE_KEY`.
 Для `/api/analyze` и `/api/submissions` действует квота по IP отдельно на каждое действие: по умолчанию 1 запрос в минуту и 10 запросов в сутки. Настройки: `RATE_LIMIT_PER_MINUTE`, `RATE_LIMIT_PER_DAY`.
 Админка доступна по `/admin`. Для неё нужен `ADMIN_TOKEN` в `.env`; токен вводится в UI и отправляется только как Bearer token к `/api/admin/*`. Посещения хранят не сырой IP, а SHA-256 хэш с `VISIT_HASH_SALT` или `ADMIN_TOKEN` как солью.
