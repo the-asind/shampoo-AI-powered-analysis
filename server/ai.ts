@@ -12,6 +12,15 @@ type AiLogger = {
   info?: (payload: Record<string, unknown>, message?: string) => void;
 };
 type AiFetchOptions = NonNullable<Parameters<typeof undiciFetch>[1]>;
+type AiProvider = "openai" | "anthropic";
+type AiProviderRole = "primary" | "fallback";
+type AiProviderConfig = {
+  provider: AiProvider;
+  role: AiProviderRole;
+  apiKey: string;
+  baseUrl: string;
+  model: string;
+};
 
 function normalizeAiText(value: unknown): string {
   if (Array.isArray(value)) {
@@ -69,89 +78,91 @@ const AnalysisSchema = z.object({
   shouldSuggest: z.boolean(),
 });
 
+const analysisJsonSchema = {
+  type: "object",
+  additionalProperties: false,
+  properties: {
+    score: {
+      type: "integer",
+      minimum: 0,
+      maximum: 100,
+      description: "Оценка состава от 0 до 100, где 100 соответствует 10/10.",
+    },
+    title: {
+      type: "string",
+      minLength: 3,
+      maxLength: 140,
+      description: "Короткий человеческий заголовок результата для UI. Нельзя писать placeholder вроде value, title или заголовок.",
+    },
+    verdict: {
+      type: "string",
+      maxLength: 1600,
+      description: "Краткий вердикт простым языком: хороший/средний/плохой кандидат и кому он подходит.",
+    },
+    tone: {
+      type: "string",
+      enum: ["good", "watch", "weak", "empty"],
+      description: "Общий тон для интерфейса.",
+    },
+    confidence: {
+      type: "string",
+      enum: ["высокая", "средняя", "низкая"],
+      description: "Уверенность оценки по качеству и полноте состава.",
+    },
+    shampooType: {
+      type: "string",
+      enum: [
+        "универсальный",
+        "мягкий sulfate-free",
+        "сильное очищение",
+        "чувствительная кожа",
+        "разглаживающий",
+        "маркетингово перегруженный",
+        "подозрительный состав",
+        "не рекомендуется",
+      ],
+      description: "Тип шампуня по составу.",
+    },
+    pros: {
+      type: "string",
+      maxLength: 2400,
+      description: "Главные плюсы одним связным текстом, без markdown-списка, без JSON-массива и без квадратных скобок.",
+    },
+    cons: {
+      type: "string",
+      maxLength: 2400,
+      description: "Главные минусы одним связным текстом, без markdown-списка, без JSON-массива и без квадратных скобок.",
+    },
+    leaderComparison: {
+      type: "string",
+      maxLength: 1800,
+      description: "Сравнение с переданными референсами простым языком. Нельзя писать placeholder вроде value.",
+    },
+    shouldSuggest: {
+      type: "boolean",
+      description: "Стоит ли предложить пользователю отправить этот шампунь в общий рейтинг.",
+    },
+  },
+  required: [
+    "score",
+    "title",
+    "verdict",
+    "tone",
+    "confidence",
+    "shampooType",
+    "pros",
+    "cons",
+    "leaderComparison",
+    "shouldSuggest",
+  ],
+} as const;
+
 const responseFormat = {
   type: "json_schema",
   json_schema: {
     name: "shampoo_analysis",
     strict: true,
-    schema: {
-      type: "object",
-      additionalProperties: false,
-      properties: {
-        score: {
-          type: "integer",
-          minimum: 0,
-          maximum: 100,
-          description: "Оценка состава от 0 до 100, где 100 соответствует 10/10.",
-        },
-        title: {
-          type: "string",
-          minLength: 3,
-          maxLength: 140,
-          description: "Короткий человеческий заголовок результата для UI. Нельзя писать placeholder вроде value, title или заголовок.",
-        },
-        verdict: {
-          type: "string",
-          maxLength: 1600,
-          description: "Краткий вердикт простым языком: хороший/средний/плохой кандидат и кому он подходит.",
-        },
-        tone: {
-          type: "string",
-          enum: ["good", "watch", "weak", "empty"],
-          description: "Общий тон для интерфейса.",
-        },
-        confidence: {
-          type: "string",
-          enum: ["высокая", "средняя", "низкая"],
-          description: "Уверенность оценки по качеству и полноте состава.",
-        },
-        shampooType: {
-          type: "string",
-          enum: [
-            "универсальный",
-            "мягкий sulfate-free",
-            "сильное очищение",
-            "чувствительная кожа",
-            "разглаживающий",
-            "маркетингово перегруженный",
-            "подозрительный состав",
-            "не рекомендуется",
-          ],
-          description: "Тип шампуня по составу.",
-        },
-        pros: {
-          type: "string",
-          maxLength: 2400,
-          description: "Главные плюсы одним связным текстом, без markdown-списка, без JSON-массива и без квадратных скобок.",
-        },
-        cons: {
-          type: "string",
-          maxLength: 2400,
-          description: "Главные минусы одним связным текстом, без markdown-списка, без JSON-массива и без квадратных скобок.",
-        },
-        leaderComparison: {
-          type: "string",
-          maxLength: 1800,
-          description: "Сравнение с переданными референсами простым языком. Нельзя писать placeholder вроде value.",
-        },
-        shouldSuggest: {
-          type: "boolean",
-          description: "Стоит ли предложить пользователю отправить этот шампунь в общий рейтинг.",
-        },
-      },
-      required: [
-        "score",
-        "title",
-        "verdict",
-        "tone",
-        "confidence",
-        "shampooType",
-        "pros",
-        "cons",
-        "leaderComparison",
-        "shouldSuggest",
-      ],
-    },
+    schema: analysisJsonSchema,
   },
 } as const;
 
@@ -239,9 +250,53 @@ ${formatComparisonReferences(references)}
 `.trim();
 }
 
-function buildOpenAiUrl() {
-  const baseUrl = (process.env.OPENAI_BASE_URL ?? "").replace(/\/+$/, "");
-  return `${baseUrl}/chat/completions`;
+function buildAnthropicUrl(baseUrl: string) {
+  return `${baseUrl.replace(/\/+$/, "")}/messages`;
+}
+
+function normalizedProvider(value: string | undefined, fallback: AiProvider): AiProvider {
+  const normalized = value?.trim().toLowerCase();
+  return normalized === "anthropic" || normalized === "openai" ? normalized : fallback;
+}
+
+function getProviderConfig(provider: AiProvider, role: AiProviderRole): AiProviderConfig | null {
+  if (provider === "anthropic") {
+    const apiKey = process.env.ANTHROPIC_API_KEY?.trim() ?? "";
+    const baseUrl = (process.env.ANTHROPIC_BASE_URL?.trim() || "https://api.anthropic.com/v1").replace(/\/+$/, "");
+    const model = process.env.ANTHROPIC_MODEL?.trim() || "claude-sonnet-4-20250514";
+    return apiKey ? { provider, role, apiKey, baseUrl, model } : null;
+  }
+
+  const apiKey = process.env.OPENAI_API_KEY?.trim() ?? "";
+  const baseUrl = (process.env.OPENAI_BASE_URL?.trim() ?? "").replace(/\/+$/, "");
+  const model = process.env.OPENAI_MODEL?.trim() || "gpt-4o-mini";
+  return apiKey && baseUrl ? { provider, role, apiKey, baseUrl, model } : null;
+}
+
+function getProviderChain(logger?: AiLogger) {
+  const primaryProvider = normalizedProvider(process.env.AI_PROVIDER, "openai");
+  const fallbackName = process.env.AI_FALLBACK_PROVIDER?.trim().toLowerCase();
+  const fallbackProvider = fallbackName && fallbackName !== "none"
+    ? normalizedProvider(fallbackName, primaryProvider === "openai" ? "anthropic" : "openai")
+    : null;
+  const configs = [
+    getProviderConfig(primaryProvider, "primary"),
+    fallbackProvider ? getProviderConfig(fallbackProvider, "fallback") : null,
+  ].filter((config): config is AiProviderConfig => Boolean(config));
+
+  if (configs.length === 0) {
+    logger?.warn(
+      {
+        provider: "heuristic",
+        primaryProvider,
+        fallbackProvider: fallbackProvider ?? "none",
+        reason: "ai_providers_not_configured",
+      },
+      "AI providers are not configured, using heuristic analysis",
+    );
+  }
+
+  return configs;
 }
 
 function getProxyUrl() {
@@ -343,102 +398,189 @@ export function hashComposition(composition: string) {
   return crypto.createHash("sha256").update(composition.trim().toLowerCase()).digest("hex");
 }
 
+async function fetchTextSnippet(response: { text: () => Promise<string> }) {
+  const body = await response.text().catch(() => "");
+  return body ? `: ${body.slice(0, 800)}` : "";
+}
+
+async function callOpenAiProvider(params: {
+  config: AiProviderConfig;
+  composition: string;
+  systemPrompt: string;
+  signal: AbortSignal;
+}) {
+  const aiUrl = `${params.config.baseUrl}/chat/completions`;
+  const response = await undiciFetch(aiUrl, {
+    method: "POST",
+    signal: params.signal,
+    ...buildFetchOptions(),
+    headers: {
+      "content-type": "application/json",
+      authorization: `Bearer ${params.config.apiKey}`,
+    },
+    body: JSON.stringify({
+      model: params.config.model,
+      temperature: 0.1,
+      response_format: responseFormat,
+      messages: [
+        { role: "system", content: params.systemPrompt },
+        { role: "user", content: params.composition },
+      ],
+    }),
+  });
+
+  if (!response.ok) {
+    throw new Error(`OpenAI-compatible endpoint returned ${response.status}${await fetchTextSnippet(response)}`);
+  }
+
+  const payload = await response.json() as { choices?: Array<{ message?: { content?: string } }> };
+  const content = payload.choices?.[0]?.message?.content;
+  if (!content) {
+    throw new Error("OpenAI-compatible response is empty");
+  }
+
+  return extractJson(content);
+}
+
+async function callAnthropicProvider(params: {
+  config: AiProviderConfig;
+  composition: string;
+  systemPrompt: string;
+  signal: AbortSignal;
+}) {
+  const aiUrl = buildAnthropicUrl(params.config.baseUrl);
+  const response = await undiciFetch(aiUrl, {
+    method: "POST",
+    signal: params.signal,
+    ...buildFetchOptions(),
+    headers: {
+      "content-type": "application/json",
+      "x-api-key": params.config.apiKey,
+      "anthropic-version": process.env.ANTHROPIC_VERSION?.trim() || "2023-06-01",
+    },
+    body: JSON.stringify({
+      model: params.config.model,
+      max_tokens: Number(process.env.ANTHROPIC_MAX_TOKENS ?? 1800),
+      temperature: 0.1,
+      system: params.systemPrompt,
+      messages: [{ role: "user", content: params.composition }],
+      tools: [
+        {
+          name: "return_shampoo_analysis",
+          description: "Return the shampoo analysis as structured JSON.",
+          input_schema: analysisJsonSchema,
+        },
+      ],
+      tool_choice: { type: "tool", name: "return_shampoo_analysis" },
+    }),
+  });
+
+  if (!response.ok) {
+    throw new Error(`Anthropic endpoint returned ${response.status}${await fetchTextSnippet(response)}`);
+  }
+
+  const payload = await response.json() as { content?: Array<{ type?: string; name?: string; input?: unknown; text?: string }> };
+  const toolUse = payload.content?.find((item) => item.type === "tool_use" && item.name === "return_shampoo_analysis");
+  if (toolUse?.input) {
+    return toolUse.input;
+  }
+
+  const text = payload.content?.find((item) => item.type === "text" && item.text)?.text;
+  if (text) {
+    return extractJson(text);
+  }
+
+  throw new Error("Anthropic response does not contain tool_use input");
+}
+
+async function callAiProvider(params: {
+  config: AiProviderConfig;
+  composition: string;
+  systemPrompt: string;
+  signal: AbortSignal;
+}) {
+  return params.config.provider === "anthropic"
+    ? callAnthropicProvider(params)
+    : callOpenAiProvider(params);
+}
+
+function providerEndpoint(config: AiProviderConfig) {
+  return config.provider === "anthropic"
+    ? buildAnthropicUrl(config.baseUrl)
+    : `${config.baseUrl}/chat/completions`;
+}
+
 export async function analyzeWithAi(
   composition: string,
   references: ShampooComparisonReference[],
   logger?: AiLogger,
 ): Promise<{
   result: IngredientAnalysis;
-  provider: "openai-compatible" | "heuristic";
+  provider: string;
   model: string;
 }> {
-  const apiKey = process.env.OPENAI_API_KEY;
-  const model = process.env.OPENAI_MODEL ?? "gpt-4o-mini";
-  const aiUrl = buildOpenAiUrl();
   const proxyUrl = getProxyUrl();
-  const startedAt = Date.now();
+  const providers = getProviderChain(logger);
+  const systemPrompt = createSystemPrompt(references);
+  const timeout = Number(process.env.AI_TIMEOUT_MS ?? process.env.OPENAI_TIMEOUT_MS ?? 12000);
 
-  if (!apiKey || !process.env.OPENAI_BASE_URL) {
-    logger?.warn(
-      {
-        provider: "heuristic",
-        reason: !apiKey ? "openai_api_key_missing" : "openai_base_url_missing",
-      },
-      "AI endpoint is not configured, using heuristic analysis",
-    );
+  if (providers.length === 0) {
     return { result: heuristicAnalyzeIngredients(composition), provider: "heuristic", model: "local-rules" };
   }
 
-  const controller = new AbortController();
-  const timeout = Number(process.env.OPENAI_TIMEOUT_MS ?? 12000);
-  const timer = setTimeout(() => controller.abort(), timeout);
+  for (const config of providers) {
+    const startedAt = Date.now();
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeout);
 
-  try {
-    const response = await undiciFetch(aiUrl, {
-      method: "POST",
-      signal: controller.signal,
-      ...buildFetchOptions(),
-      headers: {
-        "content-type": "application/json",
-        authorization: `Bearer ${apiKey}`,
-      },
-      body: JSON.stringify({
-        model,
-        temperature: 0.1,
-        response_format: responseFormat,
-        messages: [
-          { role: "system", content: createSystemPrompt(references) },
-          { role: "user", content: composition },
-        ],
-      }),
-    });
+    try {
+      const rawResult = await callAiProvider({
+        config,
+        composition,
+        systemPrompt,
+        signal: controller.signal,
+      });
+      const parsed = clampAnalysis(AnalysisSchema.parse(rawResult));
+      logger?.info?.(
+        {
+          provider: config.provider,
+          providerRole: config.role,
+          model: config.model,
+          endpointHost: publicUrlLabel(providerEndpoint(config)),
+          proxyEnabled: Boolean(proxyUrl),
+          proxyHost: publicUrlLabel(proxyUrl),
+          durationMs: Date.now() - startedAt,
+          score: parsed.score,
+        },
+        "AI analysis succeeded",
+      );
 
-    if (!response.ok) {
-      const body = await response.text().catch(() => "");
-      throw new Error(`AI endpoint returned ${response.status}${body ? `: ${body.slice(0, 500)}` : ""}`);
+      clearTimeout(timer);
+      return {
+        result: parsed,
+        provider: config.provider,
+        model: config.model,
+      };
+    } catch (error) {
+      logger?.warn(
+        {
+          provider: config.provider,
+          providerRole: config.role,
+          model: config.model,
+          endpointHost: publicUrlLabel(providerEndpoint(config)),
+          proxyEnabled: Boolean(proxyUrl),
+          proxyHost: publicUrlLabel(proxyUrl),
+          timeoutMs: timeout,
+          durationMs: Date.now() - startedAt,
+          error: errorPayload(error),
+        },
+        "AI provider failed",
+      );
+    } finally {
+      clearTimeout(timer);
     }
-
-    const payload = await response.json() as { choices?: Array<{ message?: { content?: string } }> };
-    const content = payload.choices?.[0]?.message?.content;
-    if (!content) {
-      throw new Error("AI response is empty");
-    }
-
-    const parsed = clampAnalysis(AnalysisSchema.parse(extractJson(content)));
-    logger?.info?.(
-      {
-        provider: "openai-compatible",
-        model,
-        endpointHost: publicUrlLabel(aiUrl),
-        proxyEnabled: Boolean(proxyUrl),
-        proxyHost: publicUrlLabel(proxyUrl),
-        durationMs: Date.now() - startedAt,
-        score: parsed.score,
-      },
-      "AI analysis succeeded",
-    );
-
-    return {
-      result: parsed,
-      provider: "openai-compatible",
-      model,
-    };
-  } catch (error) {
-    logger?.warn(
-      {
-        provider: "heuristic",
-        model,
-        endpointHost: publicUrlLabel(aiUrl),
-        proxyEnabled: Boolean(proxyUrl),
-        proxyHost: publicUrlLabel(proxyUrl),
-        timeoutMs: timeout,
-        durationMs: Date.now() - startedAt,
-        error: errorPayload(error),
-      },
-      "AI analysis failed, using heuristic analysis",
-    );
-    return { result: heuristicAnalyzeIngredients(composition), provider: "heuristic", model: "local-rules" };
-  } finally {
-    clearTimeout(timer);
   }
+
+  logger?.warn({ provider: "heuristic" }, "All AI providers failed, using heuristic analysis");
+  return { result: heuristicAnalyzeIngredients(composition), provider: "heuristic", model: "local-rules" };
 }
