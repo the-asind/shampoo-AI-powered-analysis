@@ -6,7 +6,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { z } from "zod";
 import { analyzeWithAi, hashComposition, PROMPT_VERSION } from "./ai.js";
-import { checkRateLimit, createManualShampoo, createSubmission, deleteAnalysis, deleteSubmission, findLatestAnalysisByComposition, getAdminSummary, hasSubmissionForComposition, listAnalyses, listComparisonShampoos, listShampoos, listSubmissions, recordVisit, saveAnalysis } from "./db.js";
+import { checkRateLimit, createManualShampoo, createSubmission, deleteAnalysis, deleteManualShampoo, deleteSubmission, findLatestAnalysisByComposition, getAdminSummary, hasSubmissionForComposition, listAnalyses, listComparisonShampoos, listShampoos, listSubmissions, recordVisit, saveAnalysis, updateManualShampoo } from "./db.js";
 import { verifyRecaptcha } from "./recaptcha.js";
 
 dotenv.config();
@@ -203,6 +203,15 @@ app.get("/api/admin/submissions", async (request, reply) => {
   return { items: listSubmissions(query.data.limit, query.data.offset) };
 });
 
+app.get("/api/admin/shampoos", async (request, reply) => {
+  const unauthorized = requireAdmin(request, reply);
+  if (unauthorized) {
+    return unauthorized;
+  }
+
+  return { items: listShampoos() };
+});
+
 app.delete("/api/admin/analyses/:id", async (request, reply) => {
   const unauthorized = requireAdmin(request, reply);
   if (unauthorized) {
@@ -233,6 +242,21 @@ app.delete("/api/admin/submissions/:id", async (request, reply) => {
   return reply.code(changes > 0 ? 204 : 404).send(changes > 0 ? undefined : { error: "not_found" });
 });
 
+app.delete("/api/admin/shampoos/:id", async (request, reply) => {
+  const unauthorized = requireAdmin(request, reply);
+  if (unauthorized) {
+    return unauthorized;
+  }
+
+  const params = AdminIdParamsSchema.safeParse(request.params);
+  if (!params.success) {
+    return reply.code(400).send({ error: "invalid_params" });
+  }
+
+  const changes = deleteManualShampoo(params.data.id);
+  return reply.code(changes > 0 ? 204 : 404).send(changes > 0 ? undefined : { error: "not_found" });
+});
+
 app.post("/api/admin/shampoos", async (request, reply) => {
   const unauthorized = requireAdmin(request, reply);
   if (unauthorized) {
@@ -248,6 +272,32 @@ app.post("/api/admin/shampoos", async (request, reply) => {
   const item = createManualShampoo(shampoo);
   request.log.info({ action: "admin_create_shampoo", shampooId: item.id }, "shampoo_created");
   return reply.code(201).send({ item });
+});
+
+app.put("/api/admin/shampoos/:id", async (request, reply) => {
+  const unauthorized = requireAdmin(request, reply);
+  if (unauthorized) {
+    return unauthorized;
+  }
+
+  const params = AdminIdParamsSchema.safeParse(request.params);
+  if (!params.success) {
+    return reply.code(400).send({ error: "invalid_params" });
+  }
+
+  const body = AdminShampooBodySchema.safeParse(request.body);
+  if (!body.success) {
+    return reply.code(400).send({ error: "invalid_body", details: body.error.flatten() });
+  }
+
+  const { id: _ignoredId, ...shampoo } = body.data;
+  const item = updateManualShampoo(params.data.id, shampoo);
+  if (!item) {
+    return reply.code(404).send({ error: "not_found" });
+  }
+
+  request.log.info({ action: "admin_update_shampoo", shampooId: item.id }, "shampoo_updated");
+  return { item };
 });
 
 app.post("/api/analyze", async (request, reply) => {

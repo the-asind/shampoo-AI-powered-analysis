@@ -506,13 +506,18 @@ function AdminDashboard() {
   const [token, setToken] = useState(() => localStorage.getItem("adminToken") ?? "");
   const [draftToken, setDraftToken] = useState(token);
   const [summary, setSummary] = useState<AdminSummary | null>(null);
+  const [adminShampoos, setAdminShampoos] = useState<Shampoo[]>([]);
   const [analyses, setAnalyses] = useState<AdminAnalysis[]>([]);
   const [submissions, setSubmissions] = useState<AdminSubmission[]>([]);
   const [expandedAnalysisId, setExpandedAnalysisId] = useState<number | null>(null);
+  const [editingShampooId, setEditingShampooId] = useState<number | null>(null);
+  const [editingShampooJson, setEditingShampooJson] = useState("");
   const [shampooJson, setShampooJson] = useState(adminShampooExample);
   const [notice, setNotice] = useState("");
   const [loading, setLoading] = useState(false);
   const [savingShampoo, setSavingShampoo] = useState(false);
+  const [savingEditedShampoo, setSavingEditedShampoo] = useState(false);
+  const [deletingShampooId, setDeletingShampooId] = useState<number | null>(null);
 
   async function loadAdminData(activeToken = token) {
     if (!activeToken.trim()) {
@@ -524,12 +529,14 @@ function AdminDashboard() {
     setNotice("");
     try {
       const headers = { authorization: `Bearer ${activeToken.trim()}` };
-      const [summaryData, analysesData, submissionsData] = await Promise.all([
+      const [summaryData, shampoosData, analysesData, submissionsData] = await Promise.all([
         fetchJson<AdminSummary>("/api/admin/summary", { headers }),
+        fetchJson<{ items: Shampoo[] }>("/api/admin/shampoos", { headers }),
         fetchJson<{ items: AdminAnalysis[] }>("/api/admin/analyses?limit=80", { headers }),
         fetchJson<{ items: AdminSubmission[] }>("/api/admin/submissions?limit=80", { headers }),
       ]);
       setSummary(summaryData);
+      setAdminShampoos(shampoosData.items);
       setAnalyses(analysesData.items);
       setSubmissions(submissionsData.items);
       localStorage.setItem("adminToken", activeToken.trim());
@@ -592,11 +599,76 @@ function AdminDashboard() {
         headers: { authorization: `Bearer ${token}` },
         body: JSON.stringify(payload),
       });
+      setAdminShampoos((items) => [data.item, ...items].sort((a, b) => b.score - a.score || b.id - a.id));
       setNotice(`Добавлено в рейтинг: ${data.item.brandNote} ${data.item.name}.`);
     } catch {
       setNotice("Не удалось добавить шампунь. Проверь JSON, ADMIN_TOKEN и доступность API.");
     } finally {
       setSavingShampoo(false);
+    }
+  }
+
+  function openShampooEditor(item: Shampoo) {
+    setEditingShampooId(item.id);
+    setEditingShampooJson(JSON.stringify(item, null, 2));
+  }
+
+  async function updateAdminShampoo() {
+    if (!token.trim() || editingShampooId === null) {
+      setNotice("Нужен ADMIN_TOKEN и выбранный элемент рейтинга.");
+      return;
+    }
+
+    let payload: unknown;
+    try {
+      payload = parseAdminShampooInput(editingShampooJson);
+    } catch {
+      setNotice("Объект редактирования не разобрался. Проверь формат JSON/JS-like объекта.");
+      return;
+    }
+
+    setSavingEditedShampoo(true);
+    setNotice("");
+    try {
+      const data = await fetchJson<{ item: Shampoo }>(`/api/admin/shampoos/${editingShampooId}`, {
+        method: "PUT",
+        headers: { authorization: `Bearer ${token}` },
+        body: JSON.stringify(payload),
+      });
+      setAdminShampoos((items) => items.map((item) => (item.id === data.item.id ? data.item : item)).sort((a, b) => b.score - a.score || b.id - a.id));
+      setEditingShampooId(null);
+      setEditingShampooJson("");
+      setNotice(`Обновлено: ${data.item.brandNote} ${data.item.name}.`);
+    } catch {
+      setNotice("Не удалось обновить элемент рейтинга. Проверь формат, токен и доступность API.");
+    } finally {
+      setSavingEditedShampoo(false);
+    }
+  }
+
+  async function deleteAdminShampoo(id: number) {
+    if (!token.trim()) {
+      setNotice("Нужен ADMIN_TOKEN.");
+      return;
+    }
+
+    setDeletingShampooId(id);
+    setNotice("");
+    try {
+      await fetchJson(`/api/admin/shampoos/${id}`, {
+        method: "DELETE",
+        headers: { authorization: `Bearer ${token}` },
+      });
+      setAdminShampoos((items) => items.filter((item) => item.id !== id));
+      if (editingShampooId === id) {
+        setEditingShampooId(null);
+        setEditingShampooJson("");
+      }
+      setNotice(`Элемент #${id} удалён из рейтинга.`);
+    } catch {
+      setNotice("Не удалось удалить элемент рейтинга. Проверь токен и доступность API.");
+    } finally {
+      setDeletingShampooId(null);
     }
   }
 
@@ -684,6 +756,94 @@ function AdminDashboard() {
             spellCheck={false}
             className="mt-4 min-h-[320px] w-full rounded-md border border-zinc-200 bg-zinc-50 p-4 font-mono text-xs leading-5 text-zinc-700 outline-none focus:bg-white focus:ring-4 focus:ring-zinc-100"
           />
+        </section>
+
+        <section className="mt-5 rounded-lg border border-zinc-200 bg-white p-5">
+          <div className="flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
+            <div>
+              <h2 className="text-lg font-semibold">Таблица рейтинга</h2>
+              <p className="mt-1 text-sm text-zinc-500">
+                Открой строку, измени JSON и сохрани. Поддерживаются те же поля: name, brandNote, score, price, fit, base, signals, verdict, caution, inci.
+              </p>
+            </div>
+            <div className="text-sm text-zinc-400">{adminShampoos.length} записей</div>
+          </div>
+
+          <div className="mt-4 overflow-hidden rounded-md border border-zinc-200">
+            {adminShampoos.map((item) => (
+              <article key={item.id} className="border-b border-zinc-200 last:border-b-0">
+                <div className="grid gap-3 bg-zinc-50 p-4 md:grid-cols-[72px_1fr_120px_120px_230px] md:items-center">
+                  <div className="text-xs font-medium tabular-nums text-zinc-400">#{item.id}</div>
+                  <div>
+                    <div className="text-sm font-medium text-zinc-700">{item.brandNote}</div>
+                    <div className="mt-0.5 text-sm font-semibold text-zinc-950">{item.name}</div>
+                    <div className="mt-2 flex flex-wrap gap-1.5">
+                      {item.signals.map((signal) => (
+                        <span key={signal} className="rounded-full bg-white px-2 py-1 text-xs text-zinc-500 ring-1 ring-zinc-200">{signal}</span>
+                      ))}
+                    </div>
+                  </div>
+                  <div className="text-sm font-semibold tabular-nums">{item.score}</div>
+                  <div className="text-sm tabular-nums text-zinc-600">{item.price ? `${item.price} ₽/л` : "нет цены"}</div>
+                  <div className="flex flex-wrap gap-2">
+                    <button
+                      onClick={() => (editingShampooId === item.id ? setEditingShampooId(null) : openShampooEditor(item))}
+                      className="inline-flex h-9 items-center justify-center rounded-full bg-white px-4 text-sm font-medium text-zinc-700 ring-1 ring-zinc-200 hover:bg-zinc-100"
+                    >
+                      {editingShampooId === item.id ? "Закрыть" : "Редактировать"}
+                    </button>
+                    <button
+                      onClick={() => void deleteAdminShampoo(item.id)}
+                      disabled={deletingShampooId === item.id}
+                      className="inline-flex h-9 w-9 items-center justify-center rounded-full bg-white text-zinc-400 ring-1 ring-zinc-200 hover:text-red-600 disabled:cursor-not-allowed disabled:opacity-60"
+                      title="Удалить из рейтинга"
+                    >
+                      <Trash2 className="h-4 w-4" />
+                    </button>
+                  </div>
+                </div>
+
+                {editingShampooId === item.id && (
+                  <div className="border-t border-zinc-200 bg-white p-4">
+                    <textarea
+                      value={editingShampooJson}
+                      onChange={(event) => setEditingShampooJson(event.target.value)}
+                      spellCheck={false}
+                      className="min-h-[360px] w-full rounded-md border border-zinc-200 bg-zinc-50 p-4 font-mono text-xs leading-5 text-zinc-700 outline-none focus:bg-white focus:ring-4 focus:ring-zinc-100"
+                    />
+                    <div className="mt-3 flex flex-wrap gap-2">
+                      <button
+                        onClick={() => void updateAdminShampoo()}
+                        disabled={savingEditedShampoo}
+                        className="inline-flex h-10 items-center justify-center gap-2 rounded-full bg-zinc-950 px-4 text-sm font-medium text-white disabled:cursor-not-allowed disabled:opacity-60"
+                      >
+                        <CheckCircle2 className="h-4 w-4" />
+                        {savingEditedShampoo ? "Сохраняю" : "Сохранить изменения"}
+                      </button>
+                      <button
+                        onClick={() => {
+                          setEditingShampooId(null);
+                          setEditingShampooJson("");
+                        }}
+                        className="inline-flex h-10 items-center justify-center rounded-full bg-zinc-100 px-4 text-sm font-medium text-zinc-700 hover:bg-zinc-200"
+                      >
+                        Отмена
+                      </button>
+                      <button
+                        onClick={() => void deleteAdminShampoo(item.id)}
+                        disabled={deletingShampooId === item.id}
+                        className="inline-flex h-10 items-center justify-center gap-2 rounded-full bg-red-50 px-4 text-sm font-medium text-red-700 hover:bg-red-100 disabled:cursor-not-allowed disabled:opacity-60"
+                      >
+                        <Trash2 className="h-4 w-4" />
+                        Удалить из рейтинга
+                      </button>
+                    </div>
+                  </div>
+                )}
+              </article>
+            ))}
+            {adminShampoos.length === 0 && <div className="p-4 text-sm text-zinc-500">Пока нет записей рейтинга.</div>}
+          </div>
         </section>
 
         <div className="mt-5 grid gap-5 lg:grid-cols-[1fr_1fr]">

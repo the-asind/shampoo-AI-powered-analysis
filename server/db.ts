@@ -199,6 +199,49 @@ export function createManualShampoo(item: Omit<Shampoo, "id">) {
   return { ...item, id: Number(result.lastInsertRowid) };
 }
 
+export function updateManualShampoo(id: number, item: Omit<Shampoo, "id">) {
+  const changes = db
+    .prepare(`
+      UPDATE shampoos
+      SET
+        name = @name,
+        brand_note = @brandNote,
+        score = @score,
+        price = @price,
+        fit_json = @fitJson,
+        base = @base,
+        verdict = @verdict,
+        signals_json = @signalsJson,
+        caution = @caution,
+        inci = @inci,
+        composition = @composition,
+        updated_at = CURRENT_TIMESTAMP
+      WHERE id = @id AND status = 'published'
+    `)
+    .run({
+      id,
+      name: item.name,
+      brandNote: item.brandNote,
+      score: item.score,
+      price: item.price,
+      fitJson: JSON.stringify(item.fit),
+      base: item.base,
+      verdict: item.verdict,
+      signalsJson: JSON.stringify(item.signals),
+      caution: item.caution,
+      inci: item.inci,
+      composition: item.inci,
+    }).changes;
+
+  return changes > 0 ? { ...item, id } : null;
+}
+
+export function deleteManualShampoo(id: number) {
+  return db
+    .prepare("UPDATE shampoos SET status = 'deleted', updated_at = CURRENT_TIMESTAMP WHERE id = ? AND status = 'published'")
+    .run(id).changes;
+}
+
 export function listTopShampoos(limit = 3) {
   const rows = db
     .prepare("SELECT * FROM shampoos WHERE status = 'published' ORDER BY score DESC, id DESC LIMIT ?")
