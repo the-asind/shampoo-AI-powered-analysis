@@ -1094,7 +1094,8 @@ function PublicLanding() {
   return (
     <main className="min-h-screen bg-[#fafafa] text-zinc-950">
       <section className="mx-auto max-w-[1120px] px-5 pb-10 pt-10 sm:px-8 lg:pt-14">
-        <div>
+        <div className="flex flex-col gap-10 lg:flex-row lg:items-start lg:justify-between">
+          <div>
             <div className="mb-10 inline-flex h-8 items-center rounded-full bg-zinc-950 px-4 text-sm font-medium text-white">
               shampoo.asind.dev
             </div>
@@ -1104,10 +1105,18 @@ function PublicLanding() {
             <p className="mt-7 max-w-[520px] text-xl leading-8 text-zinc-800">
               Независимый рейтинг по составу и цене. Без рекламы, сложных терминов и обещаний на бутылке.
             </p>
+          </div>
+          <a
+            href="#check-shampoo"
+            className="inline-flex h-11 w-fit items-center justify-center gap-2 rounded-full bg-zinc-950 px-5 text-sm font-medium text-white transition hover:bg-zinc-800 lg:mt-1"
+          >
+            Проверить состав своего шампуня
+            <ArrowRight className="h-4 w-4" />
+          </a>
         </div>
       </section>
 
-      <section className="mx-auto max-w-[1120px] px-5 py-8 sm:px-8">
+      <section id="check-shampoo" className="mx-auto max-w-[1120px] scroll-mt-8 px-5 py-8 sm:px-8">
         <div className="mb-5 flex flex-col gap-4 border-b border-zinc-200 pb-5 sm:flex-row sm:items-end sm:justify-between">
           <div>
             <div className="relative flex items-center gap-2">
