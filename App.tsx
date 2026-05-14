@@ -1108,15 +1108,21 @@ function PublicLanding() {
           </div>
           <a
             href="#check-shampoo"
-            className="inline-flex h-11 w-fit items-center justify-center gap-2 rounded-full bg-zinc-950 px-5 text-sm font-medium text-white transition hover:bg-zinc-800 lg:mt-1"
+            className="group flex w-full max-w-[340px] items-start justify-between gap-5 border-b border-zinc-200 pb-5 pt-1 text-left transition hover:border-zinc-400 lg:mt-16"
           >
-            Проверить состав своего шампуня
-            <ArrowRight className="h-4 w-4" />
+            <span>
+              <span className="block text-xs font-medium uppercase tracking-[0.12em] text-emerald-700">Проверка</span>
+              <span className="mt-1 block text-base font-medium leading-6 text-zinc-950">Проверить состав своего шампуня</span>
+              <span className="mt-1 block text-sm leading-5 text-zinc-500">Вставь INCI и получи разбор</span>
+            </span>
+            <span className="mt-1 inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-md bg-zinc-100 text-zinc-950 transition group-hover:bg-zinc-200">
+              <ArrowRight className="h-4 w-4 -rotate-45" />
+            </span>
           </a>
         </div>
       </section>
 
-      <section id="check-shampoo" className="mx-auto max-w-[1120px] scroll-mt-8 px-5 py-8 sm:px-8">
+      <section className="mx-auto max-w-[1120px] px-5 py-8 sm:px-8">
         <div className="mb-5 flex flex-col gap-4 border-b border-zinc-200 pb-5 sm:flex-row sm:items-end sm:justify-between">
           <div>
             <div className="relative flex items-center gap-2">
@@ -1263,7 +1269,7 @@ function PublicLanding() {
         </div>
       </section>
 
-      <section className="mx-auto max-w-[1120px] px-5 py-8 sm:px-8">
+      <section id="check-shampoo" className="mx-auto max-w-[1120px] scroll-mt-8 px-5 py-8 sm:px-8">
         <div className="grid gap-8 border-t border-zinc-200 pt-8 lg:grid-cols-[330px_1fr]">
           <div>
             <div className="mb-3 inline-flex items-center gap-2 text-sm font-medium text-zinc-500">
