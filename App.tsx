@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from "react";
-import { ArrowRight, BarChart3, CheckCircle2, ChevronDown, CircleHelp, Copy, Lock, RefreshCw, Search, Trash2 } from "lucide-react";
+import { ArrowRight, ArrowUp, BarChart3, CheckCircle2, ChevronDown, CircleHelp, Copy, Lock, RefreshCw, Search, Trash2 } from "lucide-react";
 import { mockShampoos } from "./server/mock-data";
 
 declare global {
@@ -946,6 +946,7 @@ function PublicLanding() {
   const [copiedId, setCopiedId] = useState<number | null>(null);
   const [ratingNoteOpen, setRatingNoteOpen] = useState(false);
   const [analysisElapsedSeconds, setAnalysisElapsedSeconds] = useState(0);
+  const [showBackToTop, setShowBackToTop] = useState(false);
 
   useEffect(() => {
     let ignore = false;
@@ -997,6 +998,16 @@ function PublicLanding() {
       method: "POST",
       body: JSON.stringify({ path: window.location.pathname || "/" }),
     }).catch(() => undefined);
+  }, []);
+
+  useEffect(() => {
+    const updateBackToTop = () => {
+      setShowBackToTop(window.scrollY > 560);
+    };
+
+    updateBackToTop();
+    window.addEventListener("scroll", updateBackToTop, { passive: true });
+    return () => window.removeEventListener("scroll", updateBackToTop);
   }, []);
 
   const filtered = useMemo(
@@ -1441,6 +1452,17 @@ function PublicLanding() {
           </a>
         </div>
       </section>
+
+      <button
+        type="button"
+        onClick={() => window.scrollTo({ top: 0, behavior: "smooth" })}
+        className={`fixed bottom-5 right-5 z-40 inline-flex h-12 w-12 items-center justify-center rounded-full border border-zinc-200 bg-white/95 text-zinc-700 shadow-[0_12px_34px_rgba(24,24,27,0.14)] backdrop-blur transition duration-200 hover:-translate-y-0.5 hover:text-zinc-950 hover:shadow-[0_16px_42px_rgba(24,24,27,0.18)] focus:outline-none focus:ring-4 focus:ring-zinc-200 sm:bottom-7 sm:right-7 ${
+          showBackToTop ? "pointer-events-auto translate-y-0 opacity-100" : "pointer-events-none translate-y-3 opacity-0"
+        }`}
+        aria-label="Подняться наверх"
+      >
+        <ArrowUp className="h-5 w-5 stroke-[1.75]" />
+      </button>
     </main>
   );
 }
