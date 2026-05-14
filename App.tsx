@@ -224,12 +224,14 @@ function getAnalysisProgress(elapsedSeconds: number) {
 }
 
 async function fetchJson<T>(url: string, init?: RequestInit): Promise<T> {
+  const headers = new Headers(init?.headers);
+  if (init?.body !== undefined && !headers.has("content-type")) {
+    headers.set("content-type", "application/json");
+  }
+
   const response = await fetch(url, {
     ...init,
-    headers: {
-      "content-type": "application/json",
-      ...init?.headers,
-    },
+    headers,
   });
 
   if (!response.ok) {
@@ -250,6 +252,20 @@ async function fetchJson<T>(url: string, init?: RequestInit): Promise<T> {
   }
 
   return response.json() as Promise<T>;
+}
+
+function parseAdminShampooInput(value: string) {
+  try {
+    return JSON.parse(value);
+  } catch {
+    const jsonLike = value
+      .replace(/\/\*[\s\S]*?\*\//g, "")
+      .replace(/(^|[^:])\/\/.*$/gm, "$1")
+      .replace(/,\s*([}\]])/g, "$1")
+      .replace(/([{,]\s*)([A-Za-z_$][\w$]*)(\s*:)/g, '$1"$2"$3');
+
+    return JSON.parse(jsonLike);
+  }
 }
 
 type HttpErrorPayload = {
@@ -562,9 +578,9 @@ function AdminDashboard() {
 
     let payload: unknown;
     try {
-      payload = JSON.parse(shampooJson);
+      payload = parseAdminShampooInput(shampooJson);
     } catch {
-      setNotice("JSON не разобрался. Проверь кавычки, запятые и отсутствие комментариев.");
+      setNotice("Объект не разобрался. Можно вставлять JSON или JS-like объект, но строки и значения всё равно должны быть корректно закрыты.");
       return;
     }
 
