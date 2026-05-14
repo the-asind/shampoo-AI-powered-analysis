@@ -359,7 +359,8 @@ export function findLatestAnalysisByComposition(params: {
     .prepare(`
       SELECT *
       FROM analyses
-      WHERE composition = ? OR (input_hash = ? AND composition = ?)
+      WHERE provider != 'heuristic'
+        AND (composition = ? OR (input_hash = ? AND composition = ?))
       ORDER BY created_at DESC, id DESC
       LIMIT 1
     `)
