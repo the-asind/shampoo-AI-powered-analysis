@@ -74,7 +74,6 @@ const AnalysisSchema = z.object({
   pros: textField(2400),
   cons: textField(2400),
   leaderComparison: textField(1800),
-  shouldSuggest: z.boolean(),
   score: z.number().int().min(0).max(100),
 });
 
@@ -132,15 +131,11 @@ const analysisJsonSchema = {
       maxLength: 1800,
       description: "Сравнение с переданными референсами простым языком. Нельзя писать placeholder вроде value.",
     },
-    shouldSuggest: {
-      type: "boolean",
-      description: "Стоит ли предложить пользователю отправить этот шампунь в общий рейтинг.",
-    },
     score: {
       type: "integer",
       minimum: 0,
       maximum: 100,
-      description: "Итоговая оценка состава от 0 до 100. Заполняй строго последней, только после title, verdict, tone, confidence, shampooType, pros, cons, leaderComparison и shouldSuggest.",
+      description: "Итоговая оценка состава от 0 до 100. Заполняй строго последней, только после title, verdict, tone, confidence, shampooType, pros, cons и leaderComparison.",
     },
   },
   required: [
@@ -152,7 +147,6 @@ const analysisJsonSchema = {
     "pros",
     "cons",
     "leaderComparison",
-    "shouldSuggest",
     "score",
   ],
 } as const;
@@ -279,6 +273,7 @@ ${formatComparisonReferences(references)}
 - pros и cons пиши обычным связным текстом. Не используй массивы, квадратные скобки, кавычки вокруг каждого пункта и markdown-списки.
 - leaderComparison обязательно сравнивает пользовательский состав с несколькими референсами выше: лидерами по типам кожи головы и ориентирами около 70/60/50 баллов.
 - В leaderComparison явно объясняй, почему score поставлен выше, ниже или рядом с конкретными фаворитами. Не ограничивайся словами «проигрывает в сенсорике» — уточняй, насколько это важно для рейтинга состава.
+- Решение о предложении отправить шампунь в общий рейтинг принимает сайт по итоговому score. Не добавляй в JSON отдельное поле для этого решения.
 - Не называй отсутствие пантенола, ниацинамида, масел, экстрактов, отдушки или витаминов главным минусом, если формула и без них технологически чистая и логичная. Это можно указать только как ограничение для сухих/повреждённых волос или для пользователя, которому важен аромат/косметическая сенсорика.
 - Не уходи в регуляторные детали вроде "leave-on", "rinse-off", "запрещён в ЕС", если это не ключевой красный флаг уровня Lilial. Для обычного покупателя формулируй проще: "может раздражать чувствительную кожу", "лучше избегать при чувствительной коже головы", "устаревшая консервация".
 - Не перегружай pros и cons списком INCI-названий. Упоминай только 3–5 действительно важных причин оценки и объясняй их человеческим языком.
@@ -400,7 +395,7 @@ function extractJson(text: string) {
   return JSON.parse(text.slice(first, last + 1));
 }
 
-function clampAnalysis(input: IngredientAnalysis): IngredientAnalysis {
+function clampAnalysis(input: Omit<IngredientAnalysis, "shouldSuggest">): IngredientAnalysis {
   const score = Math.max(0, Math.min(100, Math.round(input.score)));
   const title = normalizePlaceholder(input.title)
     || (score >= 80
@@ -422,7 +417,14 @@ function clampAnalysis(input: IngredientAnalysis): IngredientAnalysis {
     cons: normalizePlaceholder(input.cons) || "Модель не выделила отдельные минусы состава.",
     leaderComparison: normalizePlaceholder(input.leaderComparison) || "Модель не дала отдельное сравнение с референсами, но оценка рассчитана по той же методике.",
     tone: score >= 80 ? "good" : score >= 60 ? "watch" : "weak",
-    shouldSuggest: score >= 80 && input.confidence !== "низкая" && input.shouldSuggest,
+    shouldSuggest: score >= 74,
+  };
+}
+
+function fallbackAnalysis(composition: string): IngredientAnalysis {
+  return {
+    ...heuristicAnalyzeIngredients(composition),
+    shouldSuggest: false,
   };
 }
 
@@ -572,7 +574,7 @@ export async function analyzeWithAi(
   const timeout = Number(process.env.AI_TIMEOUT_MS ?? process.env.OPENAI_TIMEOUT_MS ?? 12000);
 
   if (providers.length === 0) {
-    return { result: heuristicAnalyzeIngredients(composition), provider: "heuristic", model: "local-rules", rawResponse: null };
+    return { result: fallbackAnalysis(composition), provider: "heuristic", model: "local-rules", rawResponse: null };
   }
 
   for (const config of providers) {
@@ -630,5 +632,5 @@ export async function analyzeWithAi(
   }
 
   logger?.warn({ provider: "heuristic" }, "All AI providers failed, using heuristic analysis");
-  return { result: heuristicAnalyzeIngredients(composition), provider: "heuristic", model: "local-rules", rawResponse: null };
+  return { result: fallbackAnalysis(composition), provider: "heuristic", model: "local-rules", rawResponse: null };
 }

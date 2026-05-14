@@ -69,6 +69,9 @@ db.exec(`
   CREATE INDEX IF NOT EXISTS idx_submissions_status_created
     ON submissions(status, created_at DESC);
 
+  CREATE INDEX IF NOT EXISTS idx_submissions_composition
+    ON submissions(composition);
+
   CREATE TABLE IF NOT EXISTS rate_limits (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     client_ip TEXT NOT NULL,
@@ -108,7 +111,7 @@ if (!analysisColumns.some((column) => column.name === "raw_response_json")) {
   db.prepare("ALTER TABLE analyses ADD COLUMN raw_response_json TEXT NOT NULL DEFAULT ''").run();
 }
 
-const replaceShampoos = db.transaction((items: Shampoo[]) => {
+const seedShampoos = db.transaction((items: Shampoo[]) => {
   db.prepare("DELETE FROM shampoos").run();
 
   const insert = db.prepare(`
@@ -130,7 +133,10 @@ const replaceShampoos = db.transaction((items: Shampoo[]) => {
   }
 });
 
-replaceShampoos(mockShampoos);
+const shampooCount = db.prepare("SELECT COUNT(*) AS count FROM shampoos").get() as { count: number };
+if (shampooCount.count === 0) {
+  seedShampoos(mockShampoos);
+}
 
 function parseJsonArray(value: string): string[] {
   try {
@@ -163,6 +169,34 @@ export function listShampoos(audience?: Audience) {
     .all() as Record<string, unknown>[];
   const items = rows.map(mapShampoo);
   return audience ? items.filter((item) => item.fit.includes(audience)) : items;
+}
+
+export function createManualShampoo(item: Omit<Shampoo, "id">) {
+  const result = db
+    .prepare(`
+      INSERT INTO shampoos (
+        name, brand_note, score, price, fit_json, base, verdict,
+        signals_json, caution, inci, composition, status
+      ) VALUES (
+        @name, @brandNote, @score, @price, @fitJson, @base, @verdict,
+        @signalsJson, @caution, @inci, @composition, 'published'
+      )
+    `)
+    .run({
+      name: item.name,
+      brandNote: item.brandNote,
+      score: item.score,
+      price: item.price,
+      fitJson: JSON.stringify(item.fit),
+      base: item.base,
+      verdict: item.verdict,
+      signalsJson: JSON.stringify(item.signals),
+      caution: item.caution,
+      inci: item.inci,
+      composition: item.inci,
+    });
+
+  return { ...item, id: Number(result.lastInsertRowid) };
 }
 
 export function listTopShampoos(limit = 3) {
@@ -431,6 +465,14 @@ export function deleteAnalysis(id: number) {
 
 export function deleteSubmission(id: number) {
   return db.prepare("DELETE FROM submissions WHERE id = ?").run(id).changes;
+}
+
+export function hasSubmissionForComposition(composition: string) {
+  const row = db
+    .prepare("SELECT 1 FROM submissions WHERE composition = ? LIMIT 1")
+    .get(composition) as Record<string, unknown> | undefined;
+
+  return Boolean(row);
 }
 
 export function createSubmission(params: {

@@ -6,7 +6,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { z } from "zod";
 import { analyzeWithAi, hashComposition, PROMPT_VERSION } from "./ai.js";
-import { checkRateLimit, createSubmission, deleteAnalysis, deleteSubmission, findLatestAnalysisByComposition, getAdminSummary, listAnalyses, listComparisonShampoos, listShampoos, listSubmissions, recordVisit, saveAnalysis } from "./db.js";
+import { checkRateLimit, createManualShampoo, createSubmission, deleteAnalysis, deleteSubmission, findLatestAnalysisByComposition, getAdminSummary, hasSubmissionForComposition, listAnalyses, listComparisonShampoos, listShampoos, listSubmissions, recordVisit, saveAnalysis } from "./db.js";
 import { verifyRecaptcha } from "./recaptcha.js";
 
 dotenv.config();
@@ -89,6 +89,20 @@ const AdminListQuerySchema = z.object({
 
 const AdminIdParamsSchema = z.object({
   id: z.coerce.number().int().positive(),
+});
+
+const AdminShampooBodySchema = z.object({
+  id: z.number().optional(),
+  name: z.string().trim().min(1).max(220),
+  brandNote: z.string().trim().min(1).max(160),
+  score: z.number().int().min(0).max(100),
+  price: z.number().int().min(0).max(1_000_000),
+  fit: z.array(AudienceSchema).max(3),
+  base: z.string().trim().min(1).max(1200),
+  signals: z.array(z.string().trim().min(1).max(80)).min(1).max(6),
+  verdict: z.string().trim().min(1).max(2200),
+  caution: z.string().trim().min(1).max(2200),
+  inci: z.string().trim().min(1).max(12000),
 });
 
 const SubmissionBodySchema = z.object({
@@ -219,6 +233,23 @@ app.delete("/api/admin/submissions/:id", async (request, reply) => {
   return reply.code(changes > 0 ? 204 : 404).send(changes > 0 ? undefined : { error: "not_found" });
 });
 
+app.post("/api/admin/shampoos", async (request, reply) => {
+  const unauthorized = requireAdmin(request, reply);
+  if (unauthorized) {
+    return unauthorized;
+  }
+
+  const body = AdminShampooBodySchema.safeParse(request.body);
+  if (!body.success) {
+    return reply.code(400).send({ error: "invalid_body", details: body.error.flatten() });
+  }
+
+  const { id: _ignoredId, ...shampoo } = body.data;
+  const item = createManualShampoo(shampoo);
+  request.log.info({ action: "admin_create_shampoo", shampooId: item.id }, "shampoo_created");
+  return reply.code(201).send({ item });
+});
+
 app.post("/api/analyze", async (request, reply) => {
   const startedAt = Date.now();
   const body = AnalyzeBodySchema.safeParse(request.body);
@@ -237,23 +268,29 @@ app.post("/api/analyze", async (request, reply) => {
 
   const normalizedComposition = body.data.composition.trim();
   const inputHash = hashComposition(normalizedComposition);
+  const alreadySubmitted = hasSubmissionForComposition(normalizedComposition);
   const cachedAnalysis = findLatestAnalysisByComposition({
     inputHash,
     composition: normalizedComposition,
   });
   if (cachedAnalysis?.result) {
+    const cachedResult = {
+      ...cachedAnalysis.result,
+      shouldSuggest: false,
+    };
+
     request.log.info({
       action: "analyze",
       clientIp,
       provider: "cache",
       originalProvider: cachedAnalysis.provider,
       model: cachedAnalysis.model,
-      score: cachedAnalysis.result.score,
+      score: cachedResult.score,
       recaptchaMs,
       totalMs: Date.now() - startedAt,
     }, "analysis_cache_hit");
     return {
-      result: cachedAnalysis.result,
+      result: cachedResult,
       provider: "cache",
       model: cachedAnalysis.model,
       promptVersion: cachedAnalysis.promptVersion,
@@ -275,12 +312,13 @@ app.post("/api/analyze", async (request, reply) => {
   const referencesMs = Date.now() - referencesStartedAt;
   const aiStartedAt = Date.now();
   const { result, provider, model, rawResponse } = await analyzeWithAi(normalizedComposition, references, request.log);
+  const finalResult = alreadySubmitted ? { ...result, shouldSuggest: false } : result;
   const aiMs = Date.now() - aiStartedAt;
   const saveStartedAt = Date.now();
   saveAnalysis({
     inputHash,
     composition: normalizedComposition,
-    result,
+    result: finalResult,
     rawResponse,
     provider,
     model,
@@ -293,7 +331,8 @@ app.post("/api/analyze", async (request, reply) => {
     clientIp,
     provider,
     model,
-    score: result.score,
+    score: finalResult.score,
+    alreadySubmitted,
     recaptchaMs,
     rateLimitMs,
     referencesMs,
@@ -301,7 +340,7 @@ app.post("/api/analyze", async (request, reply) => {
     saveMs,
     totalMs: Date.now() - startedAt,
   }, "analysis_completed");
-  return { result, provider, model, promptVersion: PROMPT_VERSION };
+  return { result: finalResult, provider, model, promptVersion: PROMPT_VERSION };
 });
 
 app.post("/api/submissions", async (request, reply) => {

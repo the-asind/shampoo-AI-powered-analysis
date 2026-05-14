@@ -78,6 +78,21 @@ type AdminSubmission = {
 
 const fallbackShampoos: Shampoo[] = mockShampoos;
 const fallbackInciById = new Map(fallbackShampoos.map((item) => [item.id, item.inci ?? ""]));
+const adminShampooExample = `{
+  "name": "EVERYDAY",
+  "brandNote": "The Act",
+  "score": 80,
+  "price": 2810,
+  "fit": ["normal", "sensitive"],
+  "base": "Короткое описание шампуня в целом.",
+  "signals": [
+    "мягкая sulfate-free база",
+    "дорогой за литр"
+  ],
+  "verdict": "Что в составе хорошо.",
+  "caution": "Что важно учесть перед покупкой.",
+  "inci": "Aqua, Decyl Glucoside, Sodium Cocoyl Glutamate"
+}`;
 
 const tabs: { id: Audience; label: string; helper: string }[] = [
   { id: "normal", label: "Обычная", helper: "кожа головы не зудит, не жирнится слишком быстро" },
@@ -398,7 +413,11 @@ function localAnalyze(composition: string): Analysis {
   };
 }
 
-function ScoreRing({ score }: { score: number }) {
+function formatScoreRange(score: number) {
+  return `${Math.max(0, score - 3)}-${Math.min(100, score + 3)}`;
+}
+
+function ScoreRing({ score, display }: { score: number; display?: React.ReactNode }) {
   const radius = 18;
   const circumference = 2 * Math.PI * radius;
   const offset = circumference - (score / 100) * circumference;
@@ -422,7 +441,7 @@ function ScoreRing({ score }: { score: number }) {
           transform="rotate(-90 23 23)"
         />
       </svg>
-      <div className="w-8 text-right text-lg font-semibold tabular-nums text-zinc-950">{score}</div>
+      <div className="min-w-8 text-right text-lg font-semibold tabular-nums text-zinc-950">{display ?? score}</div>
     </div>
   );
 }
@@ -474,8 +493,10 @@ function AdminDashboard() {
   const [analyses, setAnalyses] = useState<AdminAnalysis[]>([]);
   const [submissions, setSubmissions] = useState<AdminSubmission[]>([]);
   const [expandedAnalysisId, setExpandedAnalysisId] = useState<number | null>(null);
+  const [shampooJson, setShampooJson] = useState(adminShampooExample);
   const [notice, setNotice] = useState("");
   const [loading, setLoading] = useState(false);
+  const [savingShampoo, setSavingShampoo] = useState(false);
 
   async function loadAdminData(activeToken = token) {
     if (!activeToken.trim()) {
@@ -530,6 +551,36 @@ function AdminDashboard() {
       void loadAdminData(token);
     } catch {
       setNotice("Не удалось удалить запись. Проверь токен и доступность API.");
+    }
+  }
+
+  async function createAdminShampoo() {
+    if (!token.trim()) {
+      setNotice("Нужен ADMIN_TOKEN.");
+      return;
+    }
+
+    let payload: unknown;
+    try {
+      payload = JSON.parse(shampooJson);
+    } catch {
+      setNotice("JSON не разобрался. Проверь кавычки, запятые и отсутствие комментариев.");
+      return;
+    }
+
+    setSavingShampoo(true);
+    setNotice("");
+    try {
+      const data = await fetchJson<{ item: Shampoo }>("/api/admin/shampoos", {
+        method: "POST",
+        headers: { authorization: `Bearer ${token}` },
+        body: JSON.stringify(payload),
+      });
+      setNotice(`Добавлено в рейтинг: ${data.item.brandNote} ${data.item.name}.`);
+    } catch {
+      setNotice("Не удалось добавить шампунь. Проверь JSON, ADMIN_TOKEN и доступность API.");
+    } finally {
+      setSavingShampoo(false);
     }
   }
 
@@ -593,6 +644,31 @@ function AdminDashboard() {
             <AdminBars rows={scoreRows} valueKey="count" />
           </section>
         </div>
+
+        <section className="mt-5 rounded-lg border border-zinc-200 bg-white p-5">
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+            <div>
+              <h2 className="text-lg font-semibold">Добавить в рейтинг</h2>
+              <p className="mt-1 text-sm text-zinc-500">
+                Вставь объект по схеме рейтинга. Поле id можно не указывать: оно игнорируется, запись получит новый id.
+              </p>
+            </div>
+            <button
+              onClick={() => void createAdminShampoo()}
+              disabled={savingShampoo}
+              className="inline-flex h-10 items-center justify-center gap-2 rounded-full bg-zinc-950 px-4 text-sm font-medium text-white disabled:cursor-not-allowed disabled:opacity-60"
+            >
+              <CheckCircle2 className="h-4 w-4" />
+              {savingShampoo ? "Сохраняю" : "Добавить"}
+            </button>
+          </div>
+          <textarea
+            value={shampooJson}
+            onChange={(event) => setShampooJson(event.target.value)}
+            spellCheck={false}
+            className="mt-4 min-h-[320px] w-full rounded-md border border-zinc-200 bg-zinc-50 p-4 font-mono text-xs leading-5 text-zinc-700 outline-none focus:bg-white focus:ring-4 focus:ring-zinc-100"
+          />
+        </section>
 
         <div className="mt-5 grid gap-5 lg:grid-cols-[1fr_1fr]">
           <section className="rounded-lg border border-zinc-200 bg-white p-5">
@@ -1059,7 +1135,7 @@ function PublicLanding() {
                       </div>
                     )}
                   </div>
-                  {analysis && analysis.tone !== "empty" && <ScoreRing score={analysis.score} />}
+                  {analysis && analysis.tone !== "empty" && <ScoreRing score={analysis.score} display={formatScoreRange(analysis.score)} />}
                 </div>
 
                 {analysis && analysis.tone !== "empty" && (
